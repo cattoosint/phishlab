@@ -2,7 +2,7 @@
 playwright>=1.40,<2
 fastapi>=0.110,<1
 uvicorn[standard]>=0.29,<1
-httpx>=0.26,<1
+httpx[socks]>=0.26,<1   # [socks] = Tor/SOCKS proxy support for the multi-vantage tracker
 # Optional stealth Firefox (better decloaking). Pinned compatible in the Docker image; set
 # PHISH_STEALTH=1 to use it. The engine falls back to vanilla Playwright Firefox if unavailable.
 # invisible_playwright @ git+https://github.com/feder-cr/invisible_playwright.git

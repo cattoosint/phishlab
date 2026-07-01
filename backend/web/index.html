@@ -467,7 +467,9 @@ function switchView(v){
   $('#view-tracker').style.display=v==='tracker'?'block':'none';
   if(v==='tracker') loadTracker();
 }
-async function loadTracker(){ try{ const d=await (await fetch('/api/tracker')).json(); renderTracker(d); renderSidebarCases(d.sites||[]); }catch(e){} }
+async function loadTracker(force){ try{ const d=await (await fetch('/api/tracker')).json(); renderSidebarCases(d.sites||[]);
+  if(!force && document.querySelector('.case.open')) return;   // don't clobber an open per-vantage view
+  renderTracker(d); }catch(e){} }
 function renderSidebarCases(sites){
   const el=$('#sb-cases');
   el.innerHTML = sites.length ? (`<div class="sc-h">Cases (${sites.length})</div>` + sites.map(s=>{
@@ -526,7 +528,7 @@ async function renameCase(u,cur){ const n=prompt('Rename case:', decodeURICompon
   await fetch('/api/tracker/rename',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:decodeURIComponent(u),name:n})}); loadTracker(); }
 async function confirmCase(u){ await fetch('/api/tracker/confirm?url='+u,{method:'POST'}); loadTracker(); }
 async function rmTrk(u){ await fetch('/api/tracker?url='+u,{method:'DELETE'}); loadTracker(); }
-$('#trk-refresh').addEventListener('click',loadTracker);
+$('#trk-refresh').addEventListener('click',()=>loadTracker(true));
 loadTracker(); setInterval(loadTracker, 60000);
 
 // health dot

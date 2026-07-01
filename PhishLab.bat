@@ -24,6 +24,15 @@ if not exist ".venv\Scripts\python.exe" (
   call ".venv\Scripts\activate.bat"
 )
 
+REM ── start Tor for the multi-vantage tracker (a 2nd exit to prove takedowns) ──
+if exist "tor\tor\tor.exe" (
+  netstat -ano | find ":9050" | find "LISTENING" >nul || (
+    echo   Starting Tor ^(2nd vantage for the takedown tracker^)...
+    start "" /min "tor\tor\tor.exe" --SocksPort 9050 --GeoIPFile "tor\data\geoip" --GeoIPv6File "tor\data\geoip6" --DataDirectory "tor\tordata"
+  )
+  set "PHISH_TRACK_VANTAGES=tor=socks5://127.0.0.1:9050"
+)
+
 echo.
 echo   PhishLab running at http://127.0.0.1:%PORT%   (close this window to stop)
 echo.
