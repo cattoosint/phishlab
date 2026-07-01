@@ -7,12 +7,14 @@ sees the moment a takedown lands. Persisted to data/tracker.json so it survives 
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import time
 from urllib.parse import urlsplit
 
 import httpx
+from playwright.async_api import async_playwright
 
 DATA = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "tracker.json")
 PING_INTERVAL = int(os.getenv("PHISH_TRACK_INTERVAL") or "1800")   # 30 min
@@ -20,6 +22,26 @@ UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox
 SUSPENDED = ("account suspended", "suspended page", "site not found", "has been seized",
              "domain has expired", "coming soon", "default web page", "site suspended",
              "this account has been suspended", "410 gone")
+# host/CDN error pages = the origin is DOWN even if the CDN answers (e.g. Cloudflare 522)
+HOST_ERRORS = ("error code 52", "connection timed out", "web server is down", "origin is unreachable",
+               "origin web server", "took too long to respond", "gateway time-out", "bad gateway",
+               "this site can't be reached", "this site can’t be reached", "no server is available",
+               "web server reported", "service temporarily unavailable", "server is unreachable")
+
+
+def _down_reason(status_code, body: str) -> str | None:
+    """Why a site should count as DOWN (None = it's up). Reads CDN/host error pages, not just codes."""
+    b = (body or "").lower()
+    if status_code is not None:
+        if 520 <= status_code <= 527:
+            return f"host error {status_code} (origin down behind CDN)"
+        if status_code in (502, 503, 504):
+            return f"server error {status_code}"
+    if any(k in b for k in SUSPENDED):
+        return "suspended / parked"
+    if any(k in b for k in HOST_ERRORS):
+        return "host unreachable"
+    return None
 
 _sites: dict[str, dict] = {}
 _lock = asyncio.Lock()
@@ -126,13 +148,12 @@ async def _ping(url: str, proxy: str | None = None) -> dict:
             t = time.perf_counter()
             r = await c.get(url)
             ms = int((time.perf_counter() - t) * 1000)
-            body = (r.text[:6000] or "").lower()
-            suspended = any(k in body for k in SUSPENDED)
-            up = (200 <= r.status_code < 400) and not suspended
-            return {"up": up, "status_code": r.status_code, "latency_ms": ms, "suspended": suspended}
+            reason = _down_reason(r.status_code, r.text[:8000] or "")
+            up = (200 <= r.status_code < 400) and not reason
+            return {"up": up, "status_code": r.status_code, "latency_ms": ms, "reason": reason}
     except Exception as exc:
-        return {"up": False, "status_code": None, "latency_ms": None, "suspended": False,
-                "error": type(exc).__name__}
+        return {"up": False, "status_code": None, "latency_ms": None,
+                "reason": f"unreachable ({type(exc).__name__})"}
 
 
 async def check(url: str) -> dict | None:
@@ -156,6 +177,7 @@ async def check(url: str) -> dict | None:
         s["checks"] = (s.get("checks") or 0) + 1
         s["vantages"] = per
         s["geo_cloaked"] = geo_cloaked
+        s["reason"] = None if up else next((p.get("reason") for p in per if p.get("reason")), "down")
         direct = next((p for p in per if p["label"] == "direct"), per[0])
         s["latency_ms"] = direct.get("latency_ms")
         s["status_code"] = direct.get("status_code")
@@ -168,6 +190,58 @@ async def check(url: str) -> dict | None:
                 s["went_down_at"] = now           # DOWN everywhere -> taken down
         _save()
         return s
+
+
+async def _capture_one(p, v: dict, url: str) -> dict:
+    """Render the URL through ONE vantage (its proxy) and screenshot what it actually sees."""
+    launch_kw = {"headless": True}
+    if v["proxy"]:
+        launch_kw["proxy"] = {"server": v["proxy"]}
+    br = None
+    try:
+        br = await p.firefox.launch(**launch_kw)
+        ctx = await br.new_context(viewport={"width": 1000, "height": 680}, ignore_https_errors=True)
+        pg = await ctx.new_page()
+        r = None
+        try:
+            r = await pg.goto(url, wait_until="domcontentloaded", timeout=20000)
+        except Exception:
+            pass
+        await pg.wait_for_timeout(1500)
+        try:
+            shot = base64.b64encode(await pg.screenshot(type="jpeg", quality=60)).decode()
+        except Exception:
+            shot = None
+        try:
+            title = await pg.title()
+        except Exception:
+            title = ""
+        try:
+            body = await pg.content()
+        except Exception:
+            body = ""
+        status = r.status if r else None
+        reason = _down_reason(status, body) if r else "unreachable (no response)"
+        up = bool(r) and 200 <= status < 400 and not reason
+        return {"label": v["label"], "up": up, "status": status, "reason": reason,
+                "title": title, "final_url": pg.url, "screenshot": shot}
+    except Exception as exc:
+        return {"label": v["label"], "up": False, "status": None, "screenshot": None,
+                "title": "", "final_url": url, "reason": f"unreachable ({type(exc).__name__})"}
+    finally:
+        if br:
+            try:
+                await br.close()
+            except Exception:
+                pass
+
+
+async def capture_views(url: str) -> list[dict]:
+    """Load the URL from EVERY vantage (direct + each proxy) and return per-vantage screenshots — the
+    visual proof that a site is really down (or geo-cloaked) across regions."""
+    vs = _vantages()
+    async with async_playwright() as p:
+        return list(await asyncio.gather(*[_capture_one(p, v, url) for v in vs]))
 
 
 async def _loop() -> None:

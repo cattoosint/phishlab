@@ -56,6 +56,17 @@
   .trk .cbtn{background:none;border:1px solid var(--line);border-radius:6px;color:var(--muted);font-size:11px;padding:4px 9px;cursor:pointer;margin-left:5px}
   .trk .cbtn:hover{color:var(--text);border-color:var(--accent)}
   .trk.taken{border-left-color:var(--bad);background:rgba(217,95,87,.06)}
+  .case{margin-bottom:8px}
+  .case .trk{margin-bottom:0;cursor:pointer}
+  .case.open .trk{border-radius:8px 8px 0 0}
+  .trk-views{border:1px solid var(--line);border-top:0;border-radius:0 0 8px 8px;padding:14px;background:var(--panel)}
+  .views-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:14px}
+  .vv{border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--bg)}
+  .vv-h{padding:8px 10px;font-size:12px;border-bottom:1px solid var(--line);display:flex;gap:8px;align-items:center}
+  .vv-h .vst{font-weight:700;font-family:var(--mono);font-size:11px}
+  .vv img{width:100%;display:block;cursor:zoom-in;background:#fff}
+  .vv-none{padding:34px 10px;text-align:center;color:var(--muted);font-size:12px}
+  .vv-u{padding:6px 10px;font-size:11px;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   @media(max-width:640px){.app{flex-direction:column}.sidebar{width:auto;height:auto;position:static;flex-direction:row;align-items:center;gap:10px}.sb-tag,.sb-foot{display:none}}
 
   /* intake */
@@ -466,22 +477,41 @@ function renderSidebarCases(sites){
 }
 function renderTracker(d){
   const sites=d.sites||[];
-  $('#trk-note').textContent=`${sites.length} case(s) · pinged every ${Math.round((d.interval||1800)/60)} min · ${((sites[0]||{}).vantages||[{}]).length} vantage(s)`;
+  $('#trk-note').textContent=`${sites.length} case(s) · pinged every ${Math.round((d.interval||1800)/60)} min · ${((sites[0]||{}).vantages||[{}]).length} vantage(s) · click a case for per-vantage views`;
   $('#trk-list').innerHTML = sites.length ? sites.map(s=>{
     const dn=s.status!=='up'; const van=(s.vantages||[]).map(v=>`${esc(v.label)} ${v.up?'✓':'✗'}`).join(' · ');
-    const taken=dn && s.went_down_at;
-    return `<div class="trk ${dn?'down':'up'} ${taken?'taken':''}">
-      <div>
-        <div style="display:flex;align-items:center;gap:6px"><b style="font-size:13px">${esc(s.name||host(s.url))}</b>
-          <button class="cbtn" onclick="renameCase('${encodeURIComponent(s.url)}','${encodeURIComponent(s.name||'')}')">rename</button></div>
-        <div class="u" style="margin-top:3px">${esc(s.url)}</div>
-        <div style="color:var(--faint);font-size:11px;margin-top:3px">first seen ${ago(s.first_seen)}${van?' · '+van:''}${s.geo_cloaked?' · <span class="cloak">⚠ geo-cloaked</span>':''}</div>
+    const taken=dn && s.went_down_at; const enc=encodeURIComponent(s.url);
+    return `<div class="case">
+      <div class="trk ${dn?'down':'up'} ${taken?'taken':''}" onclick="toggleViews(this,'${enc}')">
+        <div>
+          <div style="display:flex;align-items:center;gap:6px"><b style="font-size:13px">${esc(s.name||host(s.url))}</b>
+            <button class="cbtn" onclick="event.stopPropagation();renameCase('${enc}','${encodeURIComponent(s.name||'')}')">rename</button></div>
+          <div class="u" style="margin-top:3px">${esc(s.url)}</div>
+          <div style="color:var(--faint);font-size:11px;margin-top:3px">first seen ${ago(s.first_seen)}${van?' · '+van:''}${s.geo_cloaked?' · <span class="cloak">⚠ geo-cloaked</span>':''}</div>
+        </div>
+        <div class="st">${taken?'⚑ down':(dn?'down':'up')}</div>
+        <div style="font-size:11px;color:var(--muted)">${s.went_down_at?('↓ down '+ago(s.went_down_at)):('last up '+ago(s.last_up))}${(dn&&s.reason)?'<br><span style="color:var(--warn)">'+esc(s.reason)+'</span>':''}</div>
+        <div style="text-align:right;white-space:nowrap" onclick="event.stopPropagation()">${(taken&&!s.confirmed_down)?`<button class="cbtn" onclick="confirmCase('${enc}')">confirm</button>`:''}<button class="cbtn" onclick="rmTrk('${enc}')">remove</button></div>
       </div>
-      <div class="st">${taken?'⚑ down':(dn?'down':'up')}</div>
-      <div style="font-size:11px;color:var(--muted)">${s.went_down_at?('↓ down '+ago(s.went_down_at)):('last up '+ago(s.last_up))}</div>
-      <div style="text-align:right;white-space:nowrap">${(taken&&!s.confirmed_down)?`<button class="cbtn" onclick="confirmCase('${encodeURIComponent(s.url)}')">confirm</button>`:''}<button class="cbtn" onclick="rmTrk('${encodeURIComponent(s.url)}')">remove</button></div>
+      <div class="trk-views" style="display:none"></div>
     </div>`;
   }).join('') : `<div class="empty-note" style="padding:20px 0">No cases yet — detonate a URL, then press “Mark as phishing”.</div>`;
+}
+async function toggleViews(rowEl, enc){
+  const caseEl=rowEl.parentElement, panel=caseEl.querySelector('.trk-views');
+  if(panel.style.display==='block'){ panel.style.display='none'; caseEl.classList.remove('open'); return; }
+  panel.style.display='block'; caseEl.classList.add('open');
+  panel.innerHTML='<div class="empty-note" style="padding:14px">Capturing live views from each vantage (direct + each VPN)… ~10s.</div>';
+  try{
+    const d=await (await fetch('/api/tracker/views',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:decodeURIComponent(enc)})})).json();
+    const views=d.views||[];
+    panel.innerHTML=`<div class="views-grid">`+views.map(v=>`
+      <div class="vv">
+        <div class="vv-h"><b>${esc(v.label)}</b><span class="vst" style="color:${v.up?'var(--ok)':'var(--bad)'}">${v.up?'UP':'DOWN'}</span>${v.status?`<span style="color:var(--faint)">${v.status}</span>`:''}${(!v.up&&v.reason)?`<span style="color:var(--warn);font-size:11px">${esc(v.reason)}</span>`:''}</div>
+        ${v.screenshot?`<img src="data:image/jpeg;base64,${v.screenshot}" onclick="zoom(this.src)">`:`<div class="vv-none">no response</div>`}
+        <div class="vv-u">${esc(v.title||v.final_url||'')}</div>
+      </div>`).join('')+`</div>`;
+  }catch(e){ panel.innerHTML='<div class="empty-note" style="padding:14px">Could not capture views.</div>'; }
 }
 async function markPhishing(rep, v){
   const def=host(rep.url);

@@ -168,6 +168,16 @@ async def tracker_confirm(url: str):
     return {"site": await T.confirm_down(_norm_url(url))}
 
 
+class ViewsReq(BaseModel):
+    url: str
+
+
+@app.post("/api/tracker/views")
+async def tracker_views(req: ViewsReq):
+    """Render the case from every vantage (direct + proxies) → per-vantage screenshots as proof."""
+    return {"views": await T.capture_views(_norm_url(req.url))}
+
+
 @app.post("/api/tracker/check")
 async def tracker_check(url: str):
     return {"site": await T.check(_norm_url(url))}
