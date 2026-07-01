@@ -118,6 +118,19 @@
   .console div{padding:1px 0;white-space:pre-wrap;word-break:break-word}
   .console .warnln{color:#e8b45c} .console .telln{color:#eb7c73;font-weight:600}
 
+  /* live pane (interactive session) */
+  .live{margin-top:20px;display:none}
+  .live.on{display:block}
+  .live-head{display:flex;align-items:center;gap:12px;margin-bottom:9px}
+  .live-head .ls{font-family:var(--mono);font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--accent)}
+  .live-head .ls.hv{color:var(--warn)}
+  .live-stage{border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#000;aspect-ratio:16/9}
+  .live-stage img{width:100%;height:100%;object-fit:fill;display:block;background:#000}
+  .live-stage.hv{outline:2px solid var(--warn);outline-offset:-2px;cursor:crosshair}
+  .live-hint{font-size:12px;color:var(--muted)}
+  .live-key{margin-top:10px;width:100%;background:var(--panel);border:1px solid var(--warn);border-radius:7px;
+    color:var(--text);font-family:var(--mono);font-size:13px;padding:9px 11px;outline:none;display:none}
+
   /* lightbox */
   #lb{position:fixed;inset:0;background:rgba(6,9,12,.9);display:none;align-items:center;justify-content:center;padding:30px;z-index:9}
   #lb.on{display:flex} #lb img{max-width:100%;max-height:100%;border:1px solid var(--line);border-radius:6px}
@@ -142,6 +155,17 @@
   </section>
 
   <div class="status" id="status"><span id="statusmsg"></span><div class="bar"><i></i></div></div>
+
+  <div class="live" id="live">
+    <div class="live-head">
+      <span class="ls" id="ls">live</span>
+      <button class="go" id="resume" style="display:none;padding:7px 16px">Resume ▶</button>
+      <span class="live-hint" id="lhint"></span>
+    </div>
+    <div class="live-stage" id="lstage"><img id="limg" alt="live detonation"></div>
+    <input class="live-key" id="lkey" placeholder="type here to send keystrokes to the page…" autocomplete="off" spellcheck="false">
+    <div class="console" id="lconsole" style="margin-top:12px;max-height:150px"></div>
+  </div>
 
   <div id="out">
     <div class="verdict" id="verdict">
@@ -185,19 +209,54 @@ const host = u => { try { return new URL(u).host; } catch { return ''; } };
 function setStatus(msg, err){ const s=$('#status'); s.className='status on'+(err?' err':''); $('#statusmsg').textContent=msg; if(err) s.querySelector('.bar').style.display='none'; }
 function clearStatus(){ $('#status').className='status'; }
 
+let _poll=null, _sid=null;
+function conLines(lines){ return (lines||[]).map(l=>{const c=/TELEGRAM/.test(l)?'telln':/OFF-SITE|FILLED|filled|POSTs|gate|Resumed|solve|Solve|HAND/.test(l)?'warnln':'';return `<div class="${c}">${esc(l)}</div>`;}).join(''); }
+
 async function detonate(){
   const url = $('#url').value.trim();
   if(!url) return;
-  $('#go').disabled=true; $('#out').className='';
-  setStatus('Detonating — launching browser, decloaking, stepping through the kit… (up to a minute)');
+  $('#go').disabled=true; $('#out').className=''; clearStatus();
+  $('#live').className='live on'; $('#lconsole').innerHTML=''; $('#limg').removeAttribute('src');
+  $('#lhint').textContent='Starting…'; $('#ls').textContent='starting'; $('#ls').className='ls';
   try{
-    const r = await fetch('/api/detonate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})});
-    const data = await r.json();
-    if(!r.ok || data.error){ setStatus(data.error||('HTTP '+r.status), true); return; }
-    clearStatus(); render(data);
-  }catch(e){ setStatus('Could not reach the engine: '+e.message, true); }
-  finally{ $('#go').disabled=false; }
+    const r=await fetch('/api/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})});
+    const d=await r.json();
+    if(!r.ok||d.error){ $('#live').className='live'; setStatus(d.error||('HTTP '+r.status),true); $('#go').disabled=false; return; }
+    _sid=d.id; _startPoll(d.id);
+  }catch(e){ $('#live').className='live'; setStatus('Could not reach the engine: '+e.message,true); $('#go').disabled=false; }
 }
+
+function _startPoll(sid){
+  let done=false;
+  _poll=setInterval(async ()=>{
+    $('#limg').src='/api/session/'+sid+'/frame?t='+Date.now();   // live frame
+    let s; try{ s=await (await fetch('/api/session/'+sid)).json(); }catch(e){ return; }
+    const rep=s.report||{};
+    const lc=$('#lconsole'); lc.innerHTML=conLines(rep.narration); lc.scrollTop=lc.scrollHeight;
+    const hv=(s.state==='handover');
+    $('#ls').textContent=hv?'handover — action needed':s.state; $('#ls').className='ls'+(hv?' hv':'');
+    $('#lstage').className='live-stage'+(hv?' hv':'');
+    $('#resume').style.display=hv?'inline-flex':'none';
+    $('#lkey').style.display=hv?'block':'none';
+    $('#lhint').textContent=hv?'Anti-bot gate — click / type in the frame above to solve it, then Resume.':'Detonating live…';
+    if((s.state==='done'||s.state==='error')&&!done){
+      done=true; clearInterval(_poll); _sid=null; $('#live').className='live'; $('#go').disabled=false;
+      if(s.state==='error') setStatus('Detonation failed: '+(rep.error||''),true); else render(rep);
+    }
+  },500);
+}
+
+async function _send(ev){ if(_sid) try{ await fetch('/api/session/'+_sid+'/input',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(ev)}); }catch(e){} }
+$('#limg').addEventListener('click',(e)=>{
+  if(!_sid || $('#ls').className.indexOf('hv')<0) return;   // only during handover
+  const r=e.target.getBoundingClientRect();
+  _send({type:'click',x:(e.clientX-r.left)/r.width,y:(e.clientY-r.top)/r.height});
+});
+$('#lkey').addEventListener('keydown',(e)=>{
+  if(e.key.length===1){ _send({type:'type',text:e.key}); }
+  else if(['Enter','Backspace','Tab','Delete'].includes(e.key)){ e.preventDefault(); _send({type:'key',key:e.key}); }
+});
+$('#resume').addEventListener('click',async()=>{ const id=_sid; if(id){ await fetch('/api/session/'+id+'/resume',{method:'POST'}); } });
 
 function verdictClass(label,score){ if(score>=45||label==='confirmed_phishing'||label==='likely_phishing') return 'v-bad';
   if(score>=20||label==='suspicious') return 'v-warn'; return 'v-ok'; }

@@ -9,9 +9,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
+from phishlab import session as S
 from phishlab.sandbox import detonate
 
 app = FastAPI(title="PhishLab", version="0.1.0")
@@ -46,3 +47,62 @@ async def api_detonate(req: DetonateReq):
     except Exception as exc:  # detonation of a live/hostile page can fail many ways — report it
         return JSONResponse({"error": f"Detonation failed — {type(exc).__name__}: {exc}"[:300]},
                             status_code=500)
+
+
+# ── live interactive session (Phase 4b) ───────────────────────────────────────
+def _norm_url(u: str) -> str:
+    u = (u or "").strip()
+    return u if u.lower().startswith(("http://", "https://")) else "http://" + u
+
+
+@app.post("/api/session")
+async def session_start(req: DetonateReq):
+    """Start a LIVE detonation session; returns its id. Poll /state + /frame; POST /input + /resume."""
+    url = _norm_url(req.url)
+    if not url or url in ("http://", "https://"):
+        return JSONResponse({"error": "Enter a URL to detonate."}, status_code=400)
+    s = S.create(url)
+    return {"id": s.id, "state": s.state}
+
+
+@app.get("/api/session/{sid}")
+async def session_state(sid: str):
+    s = S.get(sid)
+    if not s:
+        return JSONResponse({"error": "no such session"}, status_code=404)
+    return s.snapshot_state()
+
+
+@app.get("/api/session/{sid}/frame")
+async def session_frame(sid: str):
+    s = S.get(sid)
+    if not s or s.latest_frame is None:
+        return Response(status_code=204)
+    return Response(content=s.latest_frame, media_type="image/jpeg",
+                    headers={"Cache-Control": "no-store"})
+
+
+class InputEv(BaseModel):
+    type: str
+    x: float | None = None
+    y: float | None = None
+    key: str | None = None
+    text: str | None = None
+
+
+@app.post("/api/session/{sid}/input")
+async def session_input(sid: str, ev: InputEv):
+    s = S.get(sid)
+    if not s:
+        return JSONResponse({"error": "no such session"}, status_code=404)
+    await s.forward(ev.model_dump())
+    return {"ok": True}
+
+
+@app.post("/api/session/{sid}/resume")
+async def session_resume(sid: str):
+    s = S.get(sid)
+    if not s:
+        return JSONResponse({"error": "no such session"}, status_code=404)
+    s.resume()
+    return {"ok": True, "state": s.state}
