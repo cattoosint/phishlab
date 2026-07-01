@@ -159,7 +159,8 @@
   <div class="live" id="live">
     <div class="live-head">
       <span class="ls" id="ls">live</span>
-      <button class="go" id="resume" style="display:none;padding:7px 16px">Resume ▶</button>
+      <button class="go" id="takeover" style="display:none;padding:7px 16px;background:var(--warn);color:#241a10">✋ Take over</button>
+      <button class="go" id="resume" style="display:none;padding:7px 16px">▶ Resume automation</button>
       <span class="live-hint" id="lhint"></span>
     </div>
     <div class="live-stage" id="lstage"><img id="limg" alt="live detonation"></div>
@@ -234,11 +235,12 @@ function _startPoll(sid){
     const rep=s.report||{};
     const lc=$('#lconsole'); lc.innerHTML=conLines(rep.narration); lc.scrollTop=lc.scrollHeight;
     const hv=(s.state==='handover');
-    $('#ls').textContent=hv?'handover — action needed':s.state; $('#ls').className='ls'+(hv?' hv':'');
+    $('#ls').textContent=hv?'you have control':s.state; $('#ls').className='ls'+(hv?' hv':'');
     $('#lstage').className='live-stage'+(hv?' hv':'');
+    $('#takeover').style.display=(s.state==='running')?'inline-flex':'none';
     $('#resume').style.display=hv?'inline-flex':'none';
     $('#lkey').style.display=hv?'block':'none';
-    $('#lhint').textContent=hv?'Anti-bot gate — click / type in the frame above to solve it, then Resume.':'Detonating live…';
+    $('#lhint').textContent=hv?'You have control — click / type in the frame to solve the challenge, then Resume automation.':'Detonating live… — press Take over to drive the browser yourself.';
     if((s.state==='done'||s.state==='error')&&!done){
       done=true; clearInterval(_poll); _sid=null; $('#live').className='live'; $('#go').disabled=false;
       if(s.state==='error') setStatus('Detonation failed: '+(rep.error||''),true); else render(rep);
@@ -256,6 +258,7 @@ $('#lkey').addEventListener('keydown',(e)=>{
   if(e.key.length===1){ _send({type:'type',text:e.key}); }
   else if(['Enter','Backspace','Tab','Delete'].includes(e.key)){ e.preventDefault(); _send({type:'key',key:e.key}); }
 });
+$('#takeover').addEventListener('click',async()=>{ const id=_sid; if(id){ await fetch('/api/session/'+id+'/takeover',{method:'POST'}); } });
 $('#resume').addEventListener('click',async()=>{ const id=_sid; if(id){ await fetch('/api/session/'+id+'/resume',{method:'POST'}); } });
 
 function verdictClass(label,score){ if(score>=45||label==='confirmed_phishing'||label==='likely_phishing') return 'v-bad';

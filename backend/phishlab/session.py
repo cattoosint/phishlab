@@ -34,10 +34,36 @@ class Session:
         self.latest_frame: bytes | None = None
         self.viewport = {"width": 1280, "height": 720}
         self._page = None
-        self._resume = asyncio.Event()
+        self.paused = False
+        self._gate = asyncio.Event()
+        self._gate.set()          # set = automation may proceed; clear = paused for takeover
         self._task: asyncio.Task | None = None
 
     def _log(self, m): self.report["narration"].append(m)
+
+    def _pause(self):
+        self.paused = True
+        self._gate.clear()
+        self.state = "handover"
+
+    async def _checkpoint(self) -> bool:
+        """Block while paused (analyst takeover). Returns True if it actually waited."""
+        if self.paused:
+            self.state = "handover"
+            await self._gate.wait()
+            self.state = "running"
+            return True
+        return False
+
+    def request_takeover(self):
+        """Analyst pressed 'Take over' — pause automation so they can drive the live browser."""
+        if self.state in ("running", "handover", "starting"):
+            self._pause()
+            self._log("Analyst TOOK OVER — automation paused. Solve/interact in the frame, then Resume automation.")
+
+    def resume(self):
+        self.paused = False
+        self._gate.set()
 
     async def _frame_loop(self):
         while self.state not in ("done", "error"):
@@ -69,6 +95,8 @@ class Session:
 
                 all_html = []
                 for step in range(MAX_STEPS):
+                    if await self._checkpoint():          # analyst took over before this step
+                        await page.wait_for_timeout(SETTLE_MS)
                     snap = await _snapshot(page)
                     all_html.append(snap["html"] or "")
                     forms = await B.detect_forms(page)
@@ -87,13 +115,11 @@ class Session:
                               + (f" - TELEGRAM exfil bot {tg[0]['bot_id']}" if tg else ""))
 
                     if ch:
-                        # PAUSE for the analyst to clear the gate in the live view, then re-evaluate.
+                        # anti-bot gate → auto-pause for takeover; re-evaluate the page after resume.
                         self.report["handover_needed"] = True
-                        self.state = "handover"
-                        self._log(f"Step {step}: anti-bot gate ({', '.join(ch)}) - solve it in the live view, then Resume.")
-                        self._resume.clear()
-                        await self._resume.wait()
-                        self.state = "running"
+                        self._log(f"Step {step}: anti-bot gate ({', '.join(ch)}) - Take over to solve it (click the challenge), then Resume automation.")
+                        self._pause()
+                        await self._checkpoint()
                         self._log("Resumed - re-checking the page.")
                         await page.wait_for_timeout(SETTLE_MS)
                         continue
@@ -103,6 +129,9 @@ class Session:
                         self._log("No credential form here - stopping step-through.")
                         break
 
+                    if await self._checkpoint():          # analyst took over before creds are filled
+                        await page.wait_for_timeout(SETTLE_MS)
+                        continue                          # re-evaluate rather than blindly fill
                     user, pw = _fake_creds()
                     filled = await B.fill_credentials(page, user, pw)
                     dest = cred_form.get("action")
@@ -158,12 +187,9 @@ class Session:
         except Exception:
             pass
 
-    def resume(self):
-        self._resume.set()
-
     def snapshot_state(self) -> dict:
-        return {"id": self.id, "state": self.state, "report": self.report,
-                "has_frame": self.latest_frame is not None}
+        return {"id": self.id, "state": self.state, "paused": self.paused,
+                "report": self.report, "has_frame": self.latest_frame is not None}
 
 
 def create(url: str) -> Session:

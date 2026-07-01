@@ -99,6 +99,15 @@ async def session_input(sid: str, ev: InputEv):
     return {"ok": True}
 
 
+@app.post("/api/session/{sid}/takeover")
+async def session_takeover(sid: str):
+    s = S.get(sid)
+    if not s:
+        return JSONResponse({"error": "no such session"}, status_code=404)
+    s.request_takeover()
+    return {"ok": True, "state": s.state}
+
+
 @app.post("/api/session/{sid}/resume")
 async def session_resume(sid: str):
     s = S.get(sid)
