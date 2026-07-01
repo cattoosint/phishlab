@@ -12,9 +12,8 @@ services:
       - phishlab_data:/app/data
     # Detonation is heavy (a real browser); give it headroom.
     mem_limit: 2g
-    # For the MVP the CMD runs the engine self-test; swap to the API service in Phase 0.
-    # command: ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]
-    # ports: ["8090:8000"]
+    ports:
+      - "8090:8090"     # GUI + API at http://localhost:8090
 
 volumes:
   phishlab_data:

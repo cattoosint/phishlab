@@ -12,6 +12,7 @@ COPY backend/ /app/
 
 # Detonation is browser-driven; keep it headless in the container.
 ENV PHISH_HEADFUL=0
+EXPOSE 8090
 
-# Phase 0/1: run the engine self-test. Later phases replace this with the FastAPI service.
-CMD ["python", "demo.py"]
+# Serve the GUI + detonation API. (Run the engine self-test instead with: python demo.py)
+CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8090"]

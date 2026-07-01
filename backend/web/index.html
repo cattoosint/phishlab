@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PhishLab — detonation sandbox</title>
+<style>
+  :root{
+    --bg:#10141a; --panel:#171c23; --panel2:#1e242c; --line:#29313b;
+    --text:#e4e8ec; --muted:#8b949e; --faint:#5f6b76;
+    --accent:#4a9eda; --ok:#3fb27f; --warn:#d99a3a; --bad:#d95f57;
+    --mono:ui-monospace,"Cascadia Code","Consolas",monospace;
+    --ui:-apple-system,"Segoe UI",Roboto,system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{background:var(--bg);color:var(--text);font-family:var(--ui);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+  a{color:var(--accent)}
+  .wrap{max-width:1200px;margin:0 auto;padding:0 22px 60px}
+
+  /* header */
+  header{display:flex;align-items:baseline;gap:12px;padding:20px 0 16px;border-bottom:1px solid var(--line);margin-bottom:22px}
+  .brand{font-weight:700;letter-spacing:.5px;font-size:18px}
+  .brand b{color:var(--accent)}
+  .tag{color:var(--muted);font-size:12px}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--ok);display:inline-block;margin-left:auto}
+  .hdr-note{color:var(--faint);font-size:11px;margin-left:8px}
+
+  /* intake */
+  .intake label{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);margin-bottom:7px}
+  .row{display:flex;gap:10px}
+  .row input{flex:1;background:var(--panel);border:1px solid var(--line);border-radius:7px;color:var(--text);
+    font-family:var(--mono);font-size:14px;padding:12px 13px;outline:none}
+  .row input:focus{border-color:var(--accent)}
+  .row input::placeholder{color:var(--faint)}
+  button.go{background:var(--accent);color:#08121a;border:0;border-radius:7px;font-weight:700;font-size:14px;
+    padding:0 22px;cursor:pointer;font-family:var(--ui)}
+  button.go:disabled{opacity:.5;cursor:default}
+  .hint{color:var(--faint);font-size:12px;margin-top:8px}
+
+  /* status */
+  .status{margin-top:20px;padding:16px 18px;background:var(--panel);border:1px solid var(--line);border-radius:8px;
+    color:var(--muted);font-size:13px;display:none}
+  .status.on{display:block}
+  .status .bar{height:3px;background:var(--panel2);border-radius:2px;overflow:hidden;margin-top:11px}
+  .status .bar i{display:block;height:100%;width:38%;background:var(--accent);border-radius:2px;
+    animation:slide 1.15s ease-in-out infinite}
+  @keyframes slide{0%{margin-left:-40%}100%{margin-left:100%}}
+  .status.err{color:var(--bad);border-color:#3a2a2a}
+
+  /* results */
+  #out{display:none;margin-top:22px}
+  #out.on{display:block}
+
+  .verdict{display:flex;align-items:center;gap:18px;padding:16px 18px;border:1px solid var(--line);
+    border-left-width:4px;border-radius:8px;background:var(--panel);margin-bottom:20px}
+  .verdict .score{font-size:34px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1}
+  .verdict .lab{font-size:16px;font-weight:700;letter-spacing:.03em}
+  .verdict .why{color:var(--muted);font-size:12.5px;margin-top:3px}
+  .v-bad{border-left-color:var(--bad)} .v-bad .score,.v-bad .lab{color:var(--bad)}
+  .v-warn{border-left-color:var(--warn)} .v-warn .score,.v-warn .lab{color:var(--warn)}
+  .v-ok{border-left-color:var(--muted)} .v-ok .score,.v-ok .lab{color:var(--text)}
+  .verdict .meta{margin-left:auto;text-align:right;color:var(--faint);font-size:11.5px;font-family:var(--mono)}
+
+  .grid{display:grid;grid-template-columns:1fr 340px;gap:20px}
+  @media(max-width:880px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden;margin-bottom:20px}
+  .card h2{font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);
+    margin:0;padding:12px 15px;border-bottom:1px solid var(--line);font-weight:600}
+  .card h2 span{color:var(--faint);font-weight:400;text-transform:none;letter-spacing:0}
+  .card .body{padding:6px 15px 14px}
+
+  /* timeline / evidence strip */
+  .step{display:grid;grid-template-columns:118px 1fr;gap:14px;padding:14px 0;border-bottom:1px solid var(--line)}
+  .step:last-child{border-bottom:0}
+  .shot{width:118px;height:74px;border:1px solid var(--line);border-radius:5px;object-fit:cover;object-position:top;
+    background:var(--panel2);cursor:zoom-in}
+  .shot.empty{display:flex;align-items:center;justify-content:center;color:var(--faint);font-size:11px;cursor:default}
+  .step .n{font-family:var(--mono);color:var(--faint);font-size:11px}
+  .step .act{font-weight:600;margin:1px 0 3px}
+  .step .u{font-family:var(--mono);font-size:12px;color:var(--muted);word-break:break-all}
+  .step .u b{color:var(--text);font-weight:600}
+  .flags{margin-top:7px;display:flex;flex-wrap:wrap;gap:6px}
+  .flag{font-size:11px;padding:2px 8px;border-radius:4px;border:1px solid var(--line);color:var(--muted);font-family:var(--mono)}
+  .flag.hz{color:var(--warn);border-color:#3d3324}
+  .flag.tel{color:var(--bad);border-color:#3a2a2a}
+
+  /* side panels */
+  .kv{display:flex;justify-content:space-between;gap:12px;padding:6px 0;border-bottom:1px solid var(--line);font-size:12.5px}
+  .kv:last-child{border-bottom:0}
+  .kv .k{color:var(--muted)} .kv .v{font-family:var(--mono);text-align:right;word-break:break-all;max-width:210px}
+  .mono{font-family:var(--mono);font-size:12px}
+  .list{margin:0;padding:0;list-style:none}
+  .list li{padding:5px 0;border-bottom:1px solid var(--line);font-family:var(--mono);font-size:12px;word-break:break-all}
+  .list li:last-child{border-bottom:0}
+  .tel-row{color:var(--bad)}
+  .chips{display:flex;flex-wrap:wrap;gap:6px}
+  .chip{font-family:var(--mono);font-size:11.5px;background:var(--panel2);border:1px solid var(--line);border-radius:4px;padding:3px 8px}
+  .empty-note{color:var(--faint);font-size:12px;padding:4px 0}
+
+  /* console */
+  .console{background:#0b0e12;border:1px solid var(--line);border-radius:8px;padding:12px 14px;
+    font-family:var(--mono);font-size:12px;color:var(--muted);margin-bottom:20px;max-height:190px;overflow:auto}
+  .console div{padding:1px 0;white-space:pre-wrap;word-break:break-word}
+  .console .warnln{color:var(--warn)} .console .telln{color:var(--bad)}
+
+  /* lightbox */
+  #lb{position:fixed;inset:0;background:rgba(6,9,12,.9);display:none;align-items:center;justify-content:center;padding:30px;z-index:9}
+  #lb.on{display:flex} #lb img{max-width:100%;max-height:100%;border:1px solid var(--line);border-radius:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand"><b>Phish</b>Lab</div>
+    <div class="tag">phishing detonation sandbox</div>
+    <span class="dot" id="hdot" title="engine"></span>
+    <span class="hdr-note">run on the isolated analysis host</span>
+  </header>
+
+  <section class="intake">
+    <label for="url">Specimen URL</label>
+    <div class="row">
+      <input id="url" placeholder="paste the suspected phishing url…" autocomplete="off" spellcheck="false">
+      <button class="go" id="go">Detonate</button>
+    </div>
+    <div class="hint">Drives a real browser through the page and submits <b>fake</b> credentials to any login form. Screenshots every step.</div>
+  </section>
+
+  <div class="status" id="status"><span id="statusmsg"></span><div class="bar"><i></i></div></div>
+
+  <div id="out">
+    <div class="verdict" id="verdict">
+      <div class="score" id="vscore">—</div>
+      <div><div class="lab" id="vlabel">—</div><div class="why" id="vwhy"></div></div>
+      <div class="meta" id="vmeta"></div>
+    </div>
+
+    <div class="console" id="console"></div>
+
+    <div class="grid">
+      <div>
+        <div class="card">
+          <h2>Detonation timeline <span id="tcount"></span></h2>
+          <div class="body" id="timeline"></div>
+        </div>
+      </div>
+      <div>
+        <div class="card"><h2>Exfil</h2><div class="body" id="exfil"></div></div>
+        <div class="card"><h2>Decloak</h2><div class="body" id="decloak"></div></div>
+        <div class="card"><h2>IOCs</h2><div class="body" id="iocs"></div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="lb"><img id="lbimg" alt=""></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const host = u => { try { return new URL(u).host; } catch { return ''; } };
+
+function setStatus(msg, err){ const s=$('#status'); s.className='status on'+(err?' err':''); $('#statusmsg').textContent=msg; if(err) s.querySelector('.bar').style.display='none'; }
+function clearStatus(){ $('#status').className='status'; }
+
+async function detonate(){
+  const url = $('#url').value.trim();
+  if(!url) return;
+  $('#go').disabled=true; $('#out').className='';
+  setStatus('Detonating — launching browser, decloaking, stepping through the kit… (up to a minute)');
+  try{
+    const r = await fetch('/api/detonate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})});
+    const data = await r.json();
+    if(!r.ok || data.error){ setStatus(data.error||('HTTP '+r.status), true); return; }
+    clearStatus(); render(data);
+  }catch(e){ setStatus('Could not reach the engine: '+e.message, true); }
+  finally{ $('#go').disabled=false; }
+}
+
+function verdictClass(label,score){ if(score>=45||label==='confirmed_phishing'||label==='likely_phishing') return 'v-bad';
+  if(score>=20||label==='suspicious') return 'v-warn'; return 'v-ok'; }
+
+function render(rep){
+  $('#out').className='on';
+  const v=rep.verdict||{label:'—',score:0,reasons:[]};
+  $('#verdict').className='verdict '+verdictClass(v.label,v.score);
+  $('#vscore').textContent=v.score;
+  $('#vlabel').textContent=(v.label||'').replace(/_/g,' ').toUpperCase();
+  $('#vwhy').textContent=(v.reasons||[]).join(' · ')||'no strong signals';
+  $('#vmeta').innerHTML=`${esc(host(rep.url))}<br>${(rep.steps||[]).length} steps · ${rep.elapsed??'?'}s`;
+
+  // console
+  $('#console').innerHTML=(rep.narration||[]).map(l=>{
+    const cls=/TELEGRAM/.test(l)?'telln':/OFF-SITE|FILLED|filled|POSTs/.test(l)?'warnln':'';
+    return `<div class="${cls}">${esc(l)}</div>`; }).join('');
+
+  // timeline
+  const tl=$('#timeline'); tl.innerHTML='';
+  const loads=(rep.steps||[]).filter(s=>s.action==='load'); $('#tcount').textContent=loads.length+' page'+(loads.length===1?'':'s');
+  (rep.steps||[]).forEach(s=>{
+    const shot=s.screenshot?`<img class="shot" src="data:image/jpeg;base64,${s.screenshot}" alt="step ${s.i}" onclick="zoom(this.src)">`
+      :`<div class="shot empty">no shot</div>`;
+    let right='';
+    if(s.action==='fill+submit'){
+      const off=s.off_site?'<span class="flag hz">creds leave off-site</span>':'';
+      right=`<div class="n">step ${s.i} · fill + submit</div>
+        <div class="act">Filled fake credentials → submitted</div>
+        <div class="u">POSTs to <b>${esc(s.creds_sent_to||'—')}</b></div>
+        <div class="flags"><span class="flag hz">fake creds entered</span>${off}</div>`;
+    }else{
+      const tel=(s.telegram||[]).length?`<span class="flag tel">telegram bot ${esc((s.telegram[0]||{}).bot_id||'')}</span>`:'';
+      const fc=(s.forms||[]).length?`<span class="flag">${s.forms.length} form(s)</span>`:'';
+      const pw=(s.forms||[]).some(f=>f.has_password)?'<span class="flag hz">credential form</span>':'';
+      right=`<div class="n">step ${s.i} · load</div>
+        <div class="act">${esc(s.title||'(no title)')}</div>
+        <div class="u">${esc(s.url||'')}</div>
+        <div class="flags">${fc}${pw}${tel}</div>`;
+    }
+    const div=document.createElement('div'); div.className='step'; div.innerHTML=shot+`<div>${right}</div>`; tl.appendChild(div);
+  });
+
+  // exfil
+  const ex=rep.exfil||{}; const tels=ex.telegram||[]; const acts=[...new Set((ex.form_actions||[]).filter(Boolean))];
+  $('#exfil').innerHTML = (tels.length||acts.length)
+    ? `${tels.length?`<div style="margin-bottom:8px"><div class="kv"><span class="k">Telegram exfil</span></div>
+        <ul class="list">${tels.map(t=>`<li class="tel-row">bot ${esc(t.bot_id)} · <span style="color:var(--muted)">${esc(t.bot_token)}</span>${(t.chat_ids||[]).length?` · chat ${esc((t.chat_ids||[]).join(', '))}`:''}</li>`).join('')}</ul></div>`:''}
+       ${acts.length?`<div class="kv"><span class="k">Credentials POST to</span></div><ul class="list">${acts.map(a=>`<li>${esc(a)}</li>`).join('')}</ul>`:''}`
+    : `<div class="empty-note">No exfil channel captured.</div>`;
+
+  // decloak
+  const dc=rep.decloak||{};
+  $('#decloak').innerHTML=`
+    <div class="kv"><span class="k">verdict</span><span class="v">${esc(dc.cloaked||'—')}</span></div>
+    <div class="kv"><span class="k">scanner sees</span><span class="v">${esc((dc.scanner||{}).url||(dc.scanner||{}).error||'—')}</span></div>
+    <div class="kv"><span class="k">victim sees</span><span class="v">${esc((dc.victim||{}).url||'—')}</span></div>
+    <div class="kv"><span class="k">redirect hops</span><span class="v">${((dc.redirect_chain||[]).length)||0}</span></div>`;
+
+  // iocs
+  const io=rep.iocs||{}; const brands=io.brands_impersonated||[];
+  $('#iocs').innerHTML=`
+    ${brands.length?`<div class="kv"><span class="k">brands imitated</span></div><div class="chips" style="margin:4px 0 10px">${brands.map(b=>`<span class="chip">${esc(b)}</span>`).join('')}</div>`:''}
+    <div class="kv"><span class="k">domains</span><span class="v">${(io.domains||[]).length}</span></div>
+    <div class="kv"><span class="k">ips</span><span class="v">${(io.ips||[]).length}</span></div>
+    <div class="kv"><span class="k">emails</span><span class="v">${(io.emails||[]).length}</span></div>
+    ${(io.domains||[]).length?`<ul class="list" style="margin-top:8px">${(io.domains||[]).slice(0,12).map(d=>`<li>${esc(d)}</li>`).join('')}</ul>`:''}`;
+}
+
+function zoom(src){ $('#lbimg').src=src; $('#lb').className='on'; }
+$('#lb').onclick=()=>{ $('#lb').className=''; };
+$('#go').onclick=detonate;
+$('#url').addEventListener('keydown',e=>{ if(e.key==='Enter') detonate(); });
+
+// health dot
+fetch('/api/health').then(r=>r.ok?null:Promise.reject()).catch(()=>{ $('#hdot').style.background='var(--bad)'; });
+
+// ?demo=1 renders a baked sample so the UI can be previewed with no backend
+if(new URLSearchParams(location.search).get('demo')){
+  $('#url').value='http://login-microsoftonline.secure-verify.xyz/';
+  render({url:'http://login-microsoftonline.secure-verify.xyz/',elapsed:8.4,
+    verdict:{label:'confirmed_phishing',score:100,reasons:['Telegram exfil bot embedded (id 123456789)','live credential form accepted fake creds','credentials POST to an off-site host','brand impersonation: microsoft, office']},
+    narration:['Detonating http://login-microsoftonline.secure-verify.xyz/','Decloak · scanner→google.com · victim→…/login · verdict=cloaked_diff_host','Step 0: …/login — “Sign in to your Microsoft account” · 1 form(s) · ⚠ TELEGRAM exfil bot 123456789','Step 0: filled FAKE creds → POSTs to https://evil-drop.top/steal.php  ⚠ OFF-SITE','Step 1: …/verify — “Verify your identity” · 1 form(s)','No credential form here — stopping step-through.'],
+    steps:[
+      {i:0,action:'load',url:'http://login-microsoftonline.secure-verify.xyz/login',title:'Sign in to your Microsoft account',forms:[{has_password:true}],telegram:[{bot_id:'123456789'}],screenshot:''},
+      {i:0,action:'fill+submit',creds_sent_to:'https://evil-drop.top/steal.php',off_site:true,screenshot:''},
+      {i:1,action:'load',url:'http://login-microsoftonline.secure-verify.xyz/verify',title:'Verify your identity',forms:[{has_password:false}],telegram:[],screenshot:''}],
+    exfil:{telegram:[{bot_id:'123456789',bot_token:'123456789:1234567890AbCdEfGhIjKlMnOpQrStUvWxY',chat_ids:['987654321']}],form_actions:['https://evil-drop.top/steal.php','https://evil-drop.top/otp.php']},
+    decloak:{cloaked:'cloaked_diff_host',scanner:{url:'https://www.google.com/'},victim:{url:'http://login-microsoftonline.secure-verify.xyz/login'},redirect_chain:['a','b']},
+    iocs:{domains:['evil-drop.top','login-microsoftonline.secure-verify.xyz'],ips:[],emails:[],brands_impersonated:['microsoft','office','telegram']}});
+}
+</script>
+</body>
+</html>
