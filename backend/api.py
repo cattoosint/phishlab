@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from phishlab import session as S
+from phishlab import tracker as T
 from phishlab.kit import ART_DIR
 from phishlab.sandbox import detonate
 
@@ -126,3 +127,36 @@ async def session_resume(sid: str):
         return JSONResponse({"error": "no such session"}, status_code=404)
     s.resume()
     return {"ok": True, "state": s.state}
+
+
+# ── takedown tracker (Phase 5b) ───────────────────────────────────────────────
+class TrackReq(BaseModel):
+    url: str
+    verdict: str | None = None
+    score: int | None = None
+
+
+@app.on_event("startup")
+async def _startup():
+    T.start()
+
+
+@app.get("/api/tracker")
+async def tracker_list():
+    return {"sites": await T.all_sites(), "interval": T.PING_INTERVAL}
+
+
+@app.post("/api/tracker")
+async def tracker_add(req: TrackReq):
+    url = _norm_url(req.url)
+    return {"ok": True, "site": await T.add(url, req.verdict, req.score)}
+
+
+@app.post("/api/tracker/check")
+async def tracker_check(url: str):
+    return {"site": await T.check(_norm_url(url))}
+
+
+@app.delete("/api/tracker")
+async def tracker_remove(url: str):
+    return {"ok": await T.remove(_norm_url(url))}

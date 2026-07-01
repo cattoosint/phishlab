@@ -25,6 +25,26 @@
   .tag{color:var(--muted);font-size:12px}
   .dot{width:7px;height:7px;border-radius:50%;background:var(--ok);display:inline-block;margin-left:auto}
   .hdr-note{color:var(--faint);font-size:11px;margin-left:8px}
+  .tabs{display:flex;gap:6px;margin:0 0 18px}
+  .tab{background:none;border:1px solid var(--line);border-radius:7px;color:var(--muted);font-family:var(--ui);font-size:13px;padding:7px 15px;cursor:pointer}
+  .tab.on{background:var(--panel2);color:var(--text);border-color:var(--accent)}
+  .tracker-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+  .trk{display:grid;grid-template-columns:1fr 70px 150px 70px;gap:12px;align-items:center;padding:12px 14px;border:1px solid var(--line);border-left-width:3px;border-radius:8px;margin-bottom:8px;background:var(--panel)}
+  .trk .u{font-family:var(--mono);font-size:12px;word-break:break-all}
+  .trk .st{font-family:var(--mono);font-size:13px;font-weight:700;text-transform:uppercase}
+  .trk.up{border-left-color:var(--ok)} .trk.up .st{color:var(--ok)}
+  .trk.down{border-left-color:var(--muted)} .trk.down .st{color:var(--muted)}
+  .trk .cloak{color:var(--warn)}
+  .app{display:flex;min-height:100vh}
+  .sidebar{width:210px;flex-shrink:0;border-right:1px solid var(--line);padding:22px 14px;display:flex;flex-direction:column;gap:3px;position:sticky;top:0;height:100vh}
+  .sb-brand{font-weight:700;font-size:19px} .sb-brand b{color:var(--accent)}
+  .sb-tag{color:var(--muted);font-size:11px;margin-bottom:20px}
+  .navi{text-align:left;background:none;border:0;border-radius:7px;color:var(--muted);font-family:var(--ui);font-size:13.5px;padding:10px 12px;cursor:pointer}
+  .navi:hover{color:var(--text);background:var(--panel)}
+  .navi.on{background:var(--panel2);color:var(--text)}
+  .sb-foot{margin-top:auto;color:var(--faint);font-size:11px}
+  .main{flex:1;min-width:0}
+  @media(max-width:640px){.app{flex-direction:column}.sidebar{width:auto;height:auto;position:static;flex-direction:row;align-items:center;gap:10px}.sb-tag,.sb-foot{display:none}}
 
   /* intake */
   .intake label{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);margin-bottom:7px}
@@ -139,14 +159,17 @@
 </style>
 </head>
 <body>
-<div class="wrap">
-  <header>
-    <div class="brand"><b>Phish</b>Lab</div>
-    <div class="tag">phishing detonation sandbox</div>
-    <span class="dot" id="hdot" title="engine"></span>
-    <span class="hdr-note">run on the isolated analysis host</span>
-  </header>
+<div class="app">
+  <aside class="sidebar">
+    <div class="sb-brand"><b>Phish</b>Lab</div>
+    <div class="sb-tag">detonation sandbox</div>
+    <button class="navi on" data-v="analyze" onclick="switchView('analyze')">Analyze</button>
+    <button class="navi" data-v="tracker" onclick="switchView('tracker')">Cases &amp; tracker</button>
+    <div class="sb-foot"><span class="dot" id="hdot" title="engine"></span> run on the isolated host</div>
+  </aside>
+  <main class="main"><div class="wrap">
 
+  <div id="view-analyze">
   <section class="intake">
     <label for="url">Specimen URL</label>
     <div class="row">
@@ -202,7 +225,16 @@
       </div>
     </div>
   </div>
-</div>
+  </div><!-- /view-analyze -->
+
+  <div id="view-tracker" style="display:none">
+    <div class="tracker-head">
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted)">Takedown tracker · <span id="trk-note"></span></div>
+      <button class="go" id="trk-refresh" style="padding:6px 14px">Refresh</button>
+    </div>
+    <div id="trk-list"><div class="empty-note" style="padding:20px 0">No sites tracked yet — detonate a phishing URL and it's added automatically.</div></div>
+  </div>
+</div></main></div>
 
 <div id="lb"><img id="lbimg" alt=""></div>
 
@@ -284,6 +316,7 @@ function render(rep){
   $('#vscore').textContent=v.score;
   $('#vlabel').textContent=(v.label||'').replace(/_/g,' ').toUpperCase();
   $('#vwhy').textContent=(v.reasons||[]).join(' · ')||'no strong signals';
+  if((v.score||0)>=20){ fetch('/api/tracker',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:rep.url,verdict:v.label,score:v.score})}).catch(()=>{}); }
   $('#vmeta').innerHTML=`${esc(host(rep.url))}<br>${(rep.steps||[]).length} steps · ${rep.elapsed??'?'}s`;
 
   // signals — clear cloaking yes/no + anti-bot gate + handover
@@ -399,6 +432,31 @@ function zoom(src){ $('#lbimg').src=src; $('#lb').className='on'; }
 $('#lb').onclick=()=>{ $('#lb').className=''; };
 $('#go').onclick=detonate;
 $('#url').addEventListener('keydown',e=>{ if(e.key==='Enter') detonate(); });
+
+// ── takedown tracker ──
+function ago(ts){ if(!ts) return '—'; const s=Math.floor(Date.now()/1000-ts); if(s<60)return 'just now'; if(s<3600)return Math.floor(s/60)+'m ago'; if(s<86400)return Math.floor(s/3600)+'h ago'; return Math.floor(s/86400)+'d ago'; }
+function switchView(v){
+  document.querySelectorAll('.tab').forEach(t=>t.className='tab'+(t.dataset.v===v?' on':''));
+  $('#view-analyze').style.display=v==='analyze'?'block':'none';
+  $('#view-tracker').style.display=v==='tracker'?'block':'none';
+  if(v==='tracker') loadTracker();
+}
+async function loadTracker(){ try{ renderTracker(await (await fetch('/api/tracker')).json()); }catch(e){} }
+function renderTracker(d){
+  const sites=d.sites||[];
+  $('#trk-note').textContent=`${sites.length} site(s) · pinged every ${Math.round((d.interval||1800)/60)} min · ${((sites[0]||{}).vantages||[{}]).length} vantage(s)`;
+  $('#trk-list').innerHTML = sites.length ? sites.map(s=>{
+    const dn=s.status!=='up'; const van=(s.vantages||[]).map(v=>`${esc(v.label)} ${v.up?'✓':'✗'}`).join(' · ');
+    return `<div class="trk ${dn?'down':'up'}">
+      <div><div class="u">${esc(s.url)}</div><div style="color:var(--faint);font-size:11px;margin-top:3px">first seen ${ago(s.first_seen)}${van?' · '+van:''}${s.geo_cloaked?' · <span class="cloak">⚠ geo-cloaked</span>':''}</div></div>
+      <div class="st">${dn?'down':'up'}</div>
+      <div style="font-size:11px;color:var(--muted)">${s.went_down_at?('↓ down '+ago(s.went_down_at)):('last ok '+ago(s.last_up))}</div>
+      <div><button class="tab" style="padding:4px 10px;font-size:11px" onclick="rmTrk('${encodeURIComponent(s.url)}')">remove</button></div>
+    </div>`;
+  }).join('') : `<div class="empty-note" style="padding:20px 0">No sites tracked yet.</div>`;
+}
+async function rmTrk(u){ await fetch('/api/tracker?url='+u,{method:'DELETE'}); loadTracker(); }
+$('#trk-refresh').addEventListener('click',loadTracker);
 
 // health dot
 fetch('/api/health').then(r=>r.ok?null:Promise.reject()).catch(()=>{ $('#hdot').style.background='var(--bad)'; });
