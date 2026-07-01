@@ -6,7 +6,8 @@ venv/
 env/
 backend/data/
 data/
-tor/          # downloaded Tor Expert Bundle (binary + geoip + runtime data) — fetched by the launcher
+# downloaded Tor Expert Bundle (binary + geoip + runtime data) — fetched by the launcher, not committed
+tor/
 *.sqlite
 *.sqlite-*
 screenshots/
