@@ -136,6 +136,17 @@ def _vantages() -> list[dict]:
         if "=" in part:
             label, proxy = part.split("=", 1)
             out.append({"label": label.strip(), "proxy": proxy.strip()})
+    # NordVPN SOCKS5 exits — built from service creds in the env so creds never live in a vantage
+    # string. PHISH_NORD_SERVERS="nl=amsterdam.nl.socks.nordhold.net,us=atlanta.us.socks.nordhold.net".
+    nu, npw = os.getenv("NORDVPN_SERVICE_USER"), os.getenv("NORDVPN_SERVICE_PASS")
+    if nu and npw:
+        servers = os.getenv("PHISH_NORD_SERVERS") or "nl=amsterdam.nl.socks.nordhold.net"
+        for pair in servers.split(","):
+            pair = pair.strip()
+            if "=" in pair:
+                label, host = pair.split("=", 1)
+                out.append({"label": f"nord-{label.strip()}",
+                            "proxy": f"socks5://{nu}:{npw}@{host.strip()}:1080"})
     return out
 
 

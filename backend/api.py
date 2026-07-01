@@ -13,10 +13,32 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
-from phishlab import session as S
-from phishlab import tracker as T
-from phishlab.kit import ART_DIR
-from phishlab.sandbox import detonate
+def _load_dotenv() -> None:
+    """Minimal .env loader (no dep) — backend/.env holds secrets like NordVPN creds; gitignored."""
+    p = Path(__file__).parent / ".env"
+    if not p.exists():
+        return
+    text = ""
+    for enc in ("utf-8-sig", "utf-16", "utf-8", "latin-1"):
+        try:
+            text = p.read_text(encoding=enc)
+            break
+        except Exception:
+            continue
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+
+_load_dotenv()
+
+from phishlab import session as S       # noqa: E402  (import after .env is loaded)
+from phishlab import tracker as T        # noqa: E402
+from phishlab.kit import ART_DIR         # noqa: E402
+from phishlab.sandbox import detonate    # noqa: E402
 
 app = FastAPI(title="PhishLab", version="0.1.0")
 WEB = Path(__file__).parent / "web"

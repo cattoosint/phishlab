@@ -462,10 +462,10 @@ $('#url').addEventListener('keydown',e=>{ if(e.key==='Enter') detonate(); });
 // ── takedown tracker ──
 function ago(ts){ if(!ts) return '—'; const s=Math.floor(Date.now()/1000-ts); if(s<60)return 'just now'; if(s<3600)return Math.floor(s/60)+'m ago'; if(s<86400)return Math.floor(s/3600)+'h ago'; return Math.floor(s/86400)+'d ago'; }
 function switchView(v){
-  document.querySelectorAll('.tab').forEach(t=>t.className='tab'+(t.dataset.v===v?' on':''));
+  document.querySelectorAll('.navi').forEach(t=>t.className='navi'+(t.dataset.v===v?' on':''));
   $('#view-analyze').style.display=v==='analyze'?'block':'none';
   $('#view-tracker').style.display=v==='tracker'?'block':'none';
-  if(v==='tracker') loadTracker();
+  if(v==='tracker') loadTracker(true);   // force a fresh, fully-collapsed list of ALL cases
 }
 async function loadTracker(force){ try{ const d=await (await fetch('/api/tracker')).json(); renderSidebarCases(d.sites||[]);
   if(!force && document.querySelector('.case.open')) return;   // don't clobber an open per-vantage view
@@ -493,7 +493,7 @@ function renderTracker(d){
         </div>
         <div class="st">${taken?'⚑ down':(dn?'down':'up')}</div>
         <div style="font-size:11px;color:var(--muted)">${s.went_down_at?('↓ down '+ago(s.went_down_at)):('last up '+ago(s.last_up))}${(dn&&s.reason)?'<br><span style="color:var(--warn)">'+esc(s.reason)+'</span>':''}</div>
-        <div style="text-align:right;white-space:nowrap" onclick="event.stopPropagation()">${(taken&&!s.confirmed_down)?`<button class="cbtn" onclick="confirmCase('${enc}')">confirm</button>`:''}<button class="cbtn" onclick="rmTrk('${enc}')">remove</button></div>
+        <div style="text-align:right;white-space:nowrap" onclick="event.stopPropagation()">${(taken&&!s.confirmed_down)?`<button class="cbtn" onclick="confirmCase('${enc}')">confirm</button>`:''}<button class="cbtn" onclick="rmTrk('${enc}',this)">remove</button></div>
       </div>
       <div class="trk-views" style="display:none"></div>
     </div>`;
@@ -527,7 +527,8 @@ async function markPhishing(rep, v){
 async function renameCase(u,cur){ const n=prompt('Rename case:', decodeURIComponent(cur||'')); if(n===null) return;
   await fetch('/api/tracker/rename',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:decodeURIComponent(u),name:n})}); loadTracker(); }
 async function confirmCase(u){ await fetch('/api/tracker/confirm?url='+u,{method:'POST'}); loadTracker(); }
-async function rmTrk(u){ await fetch('/api/tracker?url='+u,{method:'DELETE'}); loadTracker(); }
+async function rmTrk(u,btn){ const c=btn&&btn.closest('.case'); if(c) c.remove();   // instant
+  try{ await fetch('/api/tracker?url='+u,{method:'DELETE'}); }catch(e){} loadTracker(true); }
 $('#trk-refresh').addEventListener('click',()=>loadTracker(true));
 loadTracker(); setInterval(loadTracker, 60000);
 
