@@ -6,13 +6,15 @@ it only on the dedicated detonation host.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from phishlab import session as S
+from phishlab.kit import ART_DIR
 from phishlab.sandbox import detonate
 
 app = FastAPI(title="PhishLab", version="0.1.0")
@@ -33,6 +35,15 @@ async def index() -> HTMLResponse:
 @app.get("/api/health")
 async def health() -> dict:
     return {"ok": True, "service": "phishlab"}
+
+
+@app.get("/api/artifact")
+async def artifact(path: str):
+    """Download a recovered kit artifact — path-traversal guarded to the artifacts dir."""
+    ap = os.path.abspath(path)
+    if not ap.startswith(os.path.abspath(ART_DIR) + os.sep) or not os.path.isfile(ap):
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return FileResponse(ap, filename=os.path.basename(ap), media_type="application/octet-stream")
 
 
 @app.post("/api/detonate")

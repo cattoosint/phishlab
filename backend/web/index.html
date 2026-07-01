@@ -197,6 +197,7 @@
         <div class="card c-red"><h2>Exfil</h2><div class="body" id="exfil"></div></div>
         <div class="card c-green"><h2>Phishing kit</h2><div class="body" id="kit"></div></div>
         <div class="card c-teal"><h2>Decloak</h2><div class="body" id="decloak"></div></div>
+        <div class="card c-blue"><h2>Network · routing</h2><div class="body" id="network"></div></div>
         <div class="card c-violet"><h2>IOCs</h2><div class="body" id="iocs"></div></div>
       </div>
     </div>
@@ -339,13 +340,18 @@ function render(rep){
     let kh='';
     if(cl.length){ const n=cl.reduce((a,c)=>a+(c.count||0),0);
       kh+=`<div class="kv"><span class="k">⚠ RECOVERED CREDS</span><span class="v" style="color:var(--bad)">${n} victim(s)</span></div>`;
-      kh+=`<ul class="list">${cl.map(c=>`<li class="tel-row">${esc(c.url)} — ${c.count} entries${(c.victims||[]).length?`<br><span style="color:var(--muted)">${esc((c.victims||[]).slice(0,6).join(', '))}${(c.victims||[]).length>6?' …':''}</span>`:''}</li>`).join('')}</ul>`;
+      kh+=`<ul class="list">${cl.map(c=>`<li class="tel-row">${esc(c.url)} — ${c.count} entries${c.saved?` · <a href="/api/artifact?path=${encodeURIComponent(c.saved)}">download</a>`:''}${(c.victims||[]).length?`<br><span style="color:var(--muted)">${esc((c.victims||[]).slice(0,6).join(', '))}${(c.victims||[]).length>6?' …':''}</span>`:''}</li>`).join('')}</ul>`;
     }
-    if((kt.archives||[]).length) kh+=`<div class="kv"><span class="k">kit archive</span></div><ul class="list">${kt.archives.map(a=>`<li>${esc(a.url)}${a.size?' · '+Math.round(a.size/1024)+'KB':''}</li>`).join('')}</ul>`;
+    (kt.archives||[]).forEach(a=>{
+      kh+=`<div class="kv"><span class="k">kit archive</span><span class="v">${a.size?Math.round(a.size/1024)+'KB':''}${a.saved?` · <a href="/api/artifact?path=${encodeURIComponent(a.saved)}">download</a>`:''}</span></div>`;
+      const cc=a.contents||[];
+      if(cc.length) kh+=`<ul class="list">${cc.slice(0,25).map(f=>`<li><span style="color:${f.role==='victim list'?'var(--bad)':(f.role||'').includes('exfil')?'var(--warn)':'var(--muted)'}">[${esc(f.role)}]</span> ${esc(f.name)}${f.note?' · '+esc(f.note):''}</li>`).join('')}${cc.length>25?`<li class="empty-note">+${cc.length-25} more…</li>`:''}</ul>`;
+    });
     if((kt.open_dirs||[]).length) kh+=`<div class="kv"><span class="k">open directory</span><span class="v">${kt.open_dirs.length}</span></div>`;
     if((kt.sources||[]).length) kh+=`<div class="kv"><span class="k">exposed source</span><span class="v">${kt.sources.length}</span></div>`;
     if((kt.emails||[]).length) kh+=`<div class="kv"><span class="k">exfil email</span></div><ul class="list">${kt.emails.slice(0,6).map(e=>`<li>${esc(e)}</li>`).join('')}</ul>`;
     if((kt.authors||[]).length) kh+=`<div class="kv"><span class="k">actor</span><span class="v">${esc(kt.authors.join(', '))}</span></div>`;
+    if(kt.saved_to) kh+=`<div class="kv"><span class="k">files saved to</span><span class="v" style="color:#5fc795">${esc(kt.saved_to)}</span></div>`;
     $('#kit').innerHTML=kh||'<div class="empty-note">—</div>';
   }
 
@@ -370,6 +376,14 @@ function render(rep){
     <div class="kv"><span class="k">scanner sees</span><span class="v">${esc((dc.scanner||{}).url||(dc.scanner||{}).error||'—')}</span></div>
     <div class="kv"><span class="k">victim sees</span><span class="v">${esc((dc.victim||{}).url||'—')}</span></div>
     <div class="kv"><span class="k">redirect hops</span><span class="v">${((dc.redirect_chain||[]).length)||0}</span></div>`;
+
+  // network · routing
+  const nw=rep.network||{};
+  $('#network').innerHTML = (nw.count!=null) ? (
+    `<div class="kv"><span class="k">requests</span><span class="v">${nw.count||0} · ${(nw.hosts||[]).length} off-host</span></div>`+
+    ((nw.exfil||[]).length?`<div class="kv"><span class="k">data sent to (POST/xhr)</span></div><ul class="list">${nw.exfil.slice(0,12).map(x=>`<li class="tel-row">${esc(x.method)} ${esc(x.url)}</li>`).join('')}</ul>`:'')+
+    ((nw.hosts||[]).length?`<div class="kv"><span class="k">off-host contacted</span></div><ul class="list">${nw.hosts.slice(0,15).map(h=>`<li>${esc(h)}</li>`).join('')}</ul>`:'')
+  ) : `<div class="empty-note">—</div>`;
 
   // iocs
   const io=rep.iocs||{}; const brands=io.brands_impersonated||[];

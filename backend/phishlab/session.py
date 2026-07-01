@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
+from urllib.parse import urlsplit
 
 from . import browser as B
 from . import enrich as E
@@ -97,6 +98,16 @@ class Session:
                     pass
                 frames = asyncio.create_task(self._frame_loop())
                 chain: list[str] = []
+                net: list[dict] = []
+
+                def _on_req(req):
+                    try:
+                        if len(net) < 300:
+                            net.append({"method": req.method, "url": req.url, "type": req.resource_type})
+                    except Exception:
+                        pass
+
+                page.on("request", _on_req)
 
                 def _on_resp(resp):
                     try:
@@ -201,6 +212,18 @@ class Session:
                         self.report["exfil"]["telegram"].append(t)
             except Exception:
                 self.report["kit"] = {}
+            # network routing — off-host requests the page made (esp. POST/xhr/fetch = where data goes)
+            try:
+                thost = ".".join((urlsplit(self.url).hostname or "").split(".")[-2:])
+                offhost = [n for n in net if ".".join((urlsplit(n["url"]).hostname or "").split(".")[-2:]) != thost]
+                posts = [n for n in offhost if n["method"] in ("POST", "PUT") or n["type"] in ("xhr", "fetch")]
+                self.report["network"] = {
+                    "count": len(net),
+                    "hosts": sorted({urlsplit(n["url"]).hostname for n in offhost if urlsplit(n["url"]).hostname})[:40],
+                    "exfil": [{"method": n["method"], "url": n["url"][:200], "type": n["type"]} for n in posts][:30],
+                }
+            except Exception:
+                self.report["network"] = {}
             self.report["verdict"] = _verdict(self.report)
             self.report["elapsed"] = round(time.time() - t0, 1)
             self.state = "done"
