@@ -10,6 +10,7 @@ import asyncio
 import json
 import os
 import time
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -48,17 +49,43 @@ def _save() -> None:
         pass
 
 
-async def add(url: str, verdict: str | None = None, score: int | None = None) -> dict:
+async def add(url: str, name: str | None = None, verdict: str | None = None,
+              score: int | None = None) -> dict:
     async with _lock:
         _load()
         if url not in _sites:
-            _sites[url] = {"url": url, "verdict": verdict, "score": score, "first_seen": time.time(),
+            _sites[url] = {"url": url, "name": (name or (urlsplit(url).hostname or url)),
+                           "verdict": verdict, "score": score, "first_seen": time.time(),
                            "status": "pending", "last_check": None, "last_up": None,
-                           "went_down_at": None, "checks": 0, "latency_ms": None, "status_code": None}
+                           "went_down_at": None, "confirmed_down": False,
+                           "checks": 0, "latency_ms": None, "status_code": None}
             _save()
+        elif name:
+            _sites[url]["name"] = name
         s = _sites[url]
     await check(url)
     return s
+
+
+async def rename(url: str, name: str) -> dict | None:
+    async with _lock:
+        _load()
+        s = _sites.get(url)
+        if s:
+            s["name"] = name.strip() or s.get("name")
+            _save()
+        return s
+
+
+async def confirm_down(url: str) -> dict | None:
+    """Analyst confirms a takedown — mark it so the board can grey/archive it (not auto-removed)."""
+    async with _lock:
+        _load()
+        s = _sites.get(url)
+        if s:
+            s["confirmed_down"] = True
+            _save()
+        return s
 
 
 async def remove(url: str) -> bool:

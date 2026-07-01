@@ -132,8 +132,14 @@ async def session_resume(sid: str):
 # ── takedown tracker (Phase 5b) ───────────────────────────────────────────────
 class TrackReq(BaseModel):
     url: str
+    name: str | None = None
     verdict: str | None = None
     score: int | None = None
+
+
+class RenameReq(BaseModel):
+    url: str
+    name: str
 
 
 @app.on_event("startup")
@@ -149,7 +155,17 @@ async def tracker_list():
 @app.post("/api/tracker")
 async def tracker_add(req: TrackReq):
     url = _norm_url(req.url)
-    return {"ok": True, "site": await T.add(url, req.verdict, req.score)}
+    return {"ok": True, "site": await T.add(url, req.name, req.verdict, req.score)}
+
+
+@app.post("/api/tracker/rename")
+async def tracker_rename(req: RenameReq):
+    return {"site": await T.rename(_norm_url(req.url), req.name)}
+
+
+@app.post("/api/tracker/confirm")
+async def tracker_confirm(url: str):
+    return {"site": await T.confirm_down(_norm_url(url))}
 
 
 @app.post("/api/tracker/check")
