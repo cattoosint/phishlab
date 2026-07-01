@@ -14,8 +14,9 @@ import uuid
 from . import browser as B
 from . import enrich as E
 from . import extract as X
-from .sandbox import (MAX_STEPS, SETTLE_MS, _cloak_verdict, _fake_creds, _host, _snapshot,
-                      _verdict, scanner_view)
+from . import kit as K
+from .sandbox import (MAX_STEPS, SETTLE_MS, _cloak_verdict, _fake_creds, _host, _merge_ip,
+                      _snapshot, _verdict, scanner_view)
 
 FRAME_INTERVAL = 0.4      # ~2.5 fps live view
 FRAME_QUALITY = 66
@@ -182,8 +183,8 @@ class Session:
 
                 joined = "\n".join(all_html)
                 self.report["iocs"] = X.iocs(joined, self.url, extra_urls=[a for a in self.report["exfil"]["form_actions"] if a])
-                self.report["iocs"]["brands_impersonated"] = X.brand_hits(
-                    *[s.get("title", "") for s in self.report["steps"]], joined[:20000])
+                self.report["iocs"]["brands_impersonated"] = X.brand_hits(*[s.get("title", "") for s in self.report["steps"]])
+                victim_url = ((self.report.get("decloak") or {}).get("victim") or {}).get("url") or self.url
                 await vctx.close()
 
             self._log("Enriching - domain age, hosting, blocklists…")
@@ -191,6 +192,15 @@ class Session:
                 self.report["enrichment"] = await E.enrich(self.url)
             except Exception:
                 self.report["enrichment"] = {}
+            _merge_ip(self.report)
+            self._log("Hunting the phishing kit (open dir / archive / source / cred logs)…")
+            try:
+                self.report["kit"] = await K.extract_kit(victim_url)
+                for t in self.report["kit"].get("telegram", []):
+                    if t not in self.report["exfil"]["telegram"]:
+                        self.report["exfil"]["telegram"].append(t)
+            except Exception:
+                self.report["kit"] = {}
             self.report["verdict"] = _verdict(self.report)
             self.report["elapsed"] = round(time.time() - t0, 1)
             self.state = "done"

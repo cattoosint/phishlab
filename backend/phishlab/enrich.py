@@ -27,9 +27,9 @@ def _registrable(host: str) -> str:
     return ".".join(parts[-2:]) if len(parts) >= 2 else host
 
 
-async def _get_json(url: str, **kw):
+async def _get_json(url: str, timeout: float = TIMEOUT, **kw):
     try:
-        async with httpx.AsyncClient(timeout=TIMEOUT, headers={"User-Agent": UA}, follow_redirects=True) as c:
+        async with httpx.AsyncClient(timeout=timeout, headers={"User-Agent": UA}, follow_redirects=True) as c:
             r = await c.get(url, **kw)
             if r.status_code == 200:
                 return r.json()
@@ -40,7 +40,7 @@ async def _get_json(url: str, **kw):
 
 async def rdap_domain(host: str) -> dict | None:
     dom = _registrable(host)
-    data = await _get_json(f"https://rdap.org/domain/{dom}")
+    data = await _get_json(f"https://rdap.org/domain/{dom}", timeout=15)   # RDAP can be slow
     if not data:
         return None
     created = None

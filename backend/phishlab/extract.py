@@ -67,8 +67,11 @@ def off_host_urls(html: str, page_url: str) -> list[str]:
 
 
 def brand_hits(*texts: str) -> list[str]:
+    """Brands named in the given text — WORD-BOUNDARY matched (so 'ups' ≠ 'groups', 'att' ≠
+    'attention'). Callers should pass page TITLES, not full HTML: a real site legitimately mentions
+    Google/Facebook (OAuth buttons) in its markup, but a phish puts the imitated brand in the title."""
     blob = " ".join(t or "" for t in texts).lower()
-    return sorted({b for b in BRANDS if b in blob})
+    return sorted({b for b in BRANDS if re.search(r"\b" + re.escape(b) + r"\b", blob)})
 
 
 def iocs(html: str, page_url: str, extra_urls=()) -> dict:

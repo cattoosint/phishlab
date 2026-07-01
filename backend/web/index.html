@@ -83,6 +83,7 @@
   .card.c-red{border-left:3px solid #e5766b}    .card.c-red>h2{color:#ef938a}
   .card.c-violet{border-left:3px solid #9b8cf0} .card.c-violet>h2{color:#b3a8f5}
   .card.c-amber{border-left:3px solid #d99a3a}  .card.c-amber>h2{color:#e8b45c}
+  .card.c-green{border-left:3px solid #3fb27f}  .card.c-green>h2{color:#5fc795}
 
   /* timeline / evidence strip */
   .step{display:grid;grid-template-columns:230px 1fr;gap:18px;padding:16px 0;border-bottom:1px solid var(--line)}
@@ -194,6 +195,7 @@
       <div>
         <div class="card c-amber"><h2>Enrichment</h2><div class="body" id="enrich"></div></div>
         <div class="card c-red"><h2>Exfil</h2><div class="body" id="exfil"></div></div>
+        <div class="card c-green"><h2>Phishing kit</h2><div class="body" id="kit"></div></div>
         <div class="card c-teal"><h2>Decloak</h2><div class="body" id="decloak"></div></div>
         <div class="card c-violet"><h2>IOCs</h2><div class="body" id="iocs"></div></div>
       </div>
@@ -321,12 +323,31 @@ function render(rep){
   });
 
   // exfil
-  const ex=rep.exfil||{}; const tels=ex.telegram||[]; const acts=[...new Set((ex.form_actions||[]).filter(Boolean))];
-  $('#exfil').innerHTML = (tels.length||acts.length)
+  const ex=rep.exfil||{}; const tels=ex.telegram||[];
+  const posted=[...new Set((rep.steps||[]).filter(s=>s.action==='fill+submit').map(s=>s.creds_sent_to).filter(Boolean))];
+  $('#exfil').innerHTML = (tels.length||posted.length)
     ? `${tels.length?`<div style="margin-bottom:8px"><div class="kv"><span class="k">Telegram exfil</span></div>
         <ul class="list">${tels.map(t=>`<li class="tel-row">bot ${esc(t.bot_id)} · <span style="color:var(--muted)">${esc(t.bot_token)}</span>${(t.chat_ids||[]).length?` · chat ${esc((t.chat_ids||[]).join(', '))}`:''}</li>`).join('')}</ul></div>`:''}
-       ${acts.length?`<div class="kv"><span class="k">Credentials POST to</span></div><ul class="list">${acts.map(a=>`<li>${esc(a)}</li>`).join('')}</ul>`:''}`
-    : `<div class="empty-note">No exfil channel captured.</div>`;
+       ${posted.length?`<div class="kv"><span class="k">fake creds submitted to</span></div><ul class="list">${posted.map(a=>`<li class="tel-row">${esc(a)}</li>`).join('')}</ul>`:''}`
+    : `<div class="empty-note">No credentials submitted; no exfil channel captured.</div>`;
+
+  // phishing kit
+  const kt=rep.kit||{}; const cl=kt.cred_logs||[];
+  if(!kt.found && !(kt.telegram||[]).length && !(kt.emails||[]).length){
+    $('#kit').innerHTML = rep.kit ? '<div class="empty-note">No kit / logs recovered from the host.</div>' : '<div class="empty-note">—</div>';
+  } else {
+    let kh='';
+    if(cl.length){ const n=cl.reduce((a,c)=>a+(c.count||0),0);
+      kh+=`<div class="kv"><span class="k">⚠ RECOVERED CREDS</span><span class="v" style="color:var(--bad)">${n} victim(s)</span></div>`;
+      kh+=`<ul class="list">${cl.map(c=>`<li class="tel-row">${esc(c.url)} — ${c.count} entries${(c.victims||[]).length?`<br><span style="color:var(--muted)">${esc((c.victims||[]).slice(0,6).join(', '))}${(c.victims||[]).length>6?' …':''}</span>`:''}</li>`).join('')}</ul>`;
+    }
+    if((kt.archives||[]).length) kh+=`<div class="kv"><span class="k">kit archive</span></div><ul class="list">${kt.archives.map(a=>`<li>${esc(a.url)}${a.size?' · '+Math.round(a.size/1024)+'KB':''}</li>`).join('')}</ul>`;
+    if((kt.open_dirs||[]).length) kh+=`<div class="kv"><span class="k">open directory</span><span class="v">${kt.open_dirs.length}</span></div>`;
+    if((kt.sources||[]).length) kh+=`<div class="kv"><span class="k">exposed source</span><span class="v">${kt.sources.length}</span></div>`;
+    if((kt.emails||[]).length) kh+=`<div class="kv"><span class="k">exfil email</span></div><ul class="list">${kt.emails.slice(0,6).map(e=>`<li>${esc(e)}</li>`).join('')}</ul>`;
+    if((kt.authors||[]).length) kh+=`<div class="kv"><span class="k">actor</span><span class="v">${esc(kt.authors.join(', '))}</span></div>`;
+    $('#kit').innerHTML=kh||'<div class="empty-note">—</div>';
+  }
 
   // enrichment
   const en=rep.enrichment||{}, rd=en.rdap||{}, ipx=en.ip||{}, uh=en.urlhaus||{}, ct=en.cert||{};

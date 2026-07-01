@@ -20,6 +20,7 @@ from urllib.parse import urlsplit
 from . import browser as B
 from . import enrich as E
 from . import extract as X
+from . import kit as K
 
 MAX_STEPS = 6
 SETTLE_MS = 1800
@@ -181,8 +182,8 @@ async def detonate(url: str, *, max_steps: int = MAX_STEPS) -> dict:
         finally:
             joined = "\n".join(all_html)
             report["iocs"] = X.iocs(joined, url, extra_urls=[a for a in report["exfil"]["form_actions"] if a])
-            report["iocs"]["brands_impersonated"] = X.brand_hits(
-                *[s.get("title", "") for s in report["steps"]], joined[:20000])
+            # brands from TITLES only (page markup legitimately mentions Google/Facebook for OAuth)
+            report["iocs"]["brands_impersonated"] = X.brand_hits(*[s.get("title", "") for s in report["steps"]])
             try:
                 await vctx.close()
             except Exception:
@@ -192,9 +193,27 @@ async def detonate(url: str, *, max_steps: int = MAX_STEPS) -> dict:
         report["enrichment"] = await E.enrich(url)
     except Exception:
         report["enrichment"] = {}
+    _merge_ip(report)
+    try:
+        kit_url = ((report.get("decloak") or {}).get("victim") or {}).get("url") or url
+        report["kit"] = await K.extract_kit(kit_url)
+        for t in report["kit"].get("telegram", []):
+            if t not in report["exfil"]["telegram"]:
+                report["exfil"]["telegram"].append(t)
+    except Exception:
+        report["kit"] = {}
     report["verdict"] = _verdict(report)
     report["elapsed"] = round(time.time() - t0, 1)
     return report
+
+
+def _merge_ip(report: dict) -> None:
+    """Fold the resolved IP (from enrichment) into the IOCs so it shows up there too."""
+    ip = ((report.get("enrichment") or {}).get("ip") or {}).get("ip")
+    if ip:
+        ips = report.setdefault("iocs", {}).setdefault("ips", [])
+        if ip not in ips:
+            ips.insert(0, ip)
 
 
 def _verdict(r: dict) -> dict:
@@ -217,6 +236,9 @@ def _verdict(r: dict) -> dict:
         score += 15
         reasons.append("brand impersonation: " + ", ".join(brands))
     for sc, rs in E.score_signals(r.get("enrichment") or {}):
+        score += sc
+        reasons.append(rs)
+    for sc, rs in K.score_signals(r.get("kit") or {}):
         score += sc
         reasons.append(rs)
     score = min(score, 100)
