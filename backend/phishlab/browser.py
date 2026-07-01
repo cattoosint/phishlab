@@ -128,7 +128,7 @@ async def submit_form(page) -> bool:
 
 async def screenshot_b64(page) -> str | None:
     try:
-        shot = await page.screenshot(type="jpeg", quality=55)
+        shot = await page.screenshot(type="jpeg", quality=82)   # clearer thumbnails + lightbox
         return base64.b64encode(shot).decode()
     except Exception:
         return None

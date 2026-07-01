@@ -91,6 +91,15 @@
 - **Resume** → the robotic step-through continues from the now-unlocked page. This is what makes
   Cloudflare/CAPTCHA handleable end-to-end (solve-by-human instead of a solver service).
 
+**J. Email intake / auto-detonation**
+- PhishLab watches a dedicated mailbox on the external machine (IMAP). An internal machine / analyst
+  emails a suspect URL to it; the app **auto-detonates** it — hands-free — and notifies back.
+- **Strict filter:** the URL goes in the **subject**, and the message must contain *only* the link
+  (nothing else) or it's **ignored** — a safety gate so only deliberate submissions ever run.
+- **Re-fangs** defanged links (`hxxp://`, `[.]`, `[:]`) before detonating; replies with the verdict +
+  a link to the report; auto-adds the site to the Tracker (§G).
+- **Concurrency:** many emails → many detonations at once, via a job queue with a worker cap.
+
 **F. Security / anonymity (cross-cutting)**
 - Egress on the dedicated detonation line (see §1); optional proxy/Tor as a second vantage point.
 - Disposable profiles, no real data, DNS-leak prevention, network kill-switch, air-gap-friendly.
@@ -112,6 +121,7 @@
 | **4b — Live interactive handover** | Turn detonation into a live session: stream the browser to the GUI (WebSocket) + forward clicks/keys + pause/resume, so the analyst solves a Cloudflare/Turnstile gate **in-app** and automation resumes. No stepping out. | Watch + take over a detonation live. | 1–1.5 wks |
 | **5 — Reporting + takedown** | SOC report (HTML/PDF) + auto-submit to Safe Browsing / Microsoft / Fortinet (+ optional Netcraft/APWG/PhishTank). | One-click "report + takedown". | ~1 wk |
 | **5b — Takedown tracker** | Tracker tab: every reported site tracked; background pinger (~30 min) records up/down + latency + suspended-page check; UP→DOWN alerts; uptime-since-report. (Reuses the Shadow-style monitoring scheduler.) | Live board of every reported site + "taken down" status. | 4–6 days |
+| **5c — Email intake + concurrency** | Watch a mailbox (IMAP); a **subject-only** URL auto-detonates (re-fanged; strict "link-only" filter, else ignored) and replies with the verdict; a job queue runs many detonations concurrently. | Forward a URL by email → auto-detonation + verdict, at scale. | ~1 wk |
 | **6 — Polish + packaging** | Case history/search, config (keys, proxy/vantage toggle, report toggles), signed Windows installer. | Distributable v1. | 3–5 days |
 
 **Total: ~8–10 weeks to a solid v1** (with kit-extraction + live handover). A demoable MVP (Phases 0–2) ≈ 3 weeks; **Phase 1 detonation core is already built + working.**

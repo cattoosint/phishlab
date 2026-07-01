@@ -77,12 +77,18 @@
     margin:0;padding:12px 15px;border-bottom:1px solid var(--line);font-weight:600}
   .card h2 span{color:var(--faint);font-weight:400;text-transform:none;letter-spacing:0}
   .card .body{padding:6px 15px 14px}
+  /* per-section colour identity — colour aids scanning without being flashy */
+  .card.c-blue{border-left:3px solid #4a9eda}   .card.c-blue>h2{color:#83c0eb}
+  .card.c-teal{border-left:3px solid #46c7c0}   .card.c-teal>h2{color:#63d3cc}
+  .card.c-red{border-left:3px solid #e5766b}    .card.c-red>h2{color:#ef938a}
+  .card.c-violet{border-left:3px solid #9b8cf0} .card.c-violet>h2{color:#b3a8f5}
 
   /* timeline / evidence strip */
-  .step{display:grid;grid-template-columns:118px 1fr;gap:14px;padding:14px 0;border-bottom:1px solid var(--line)}
+  .step{display:grid;grid-template-columns:230px 1fr;gap:18px;padding:16px 0;border-bottom:1px solid var(--line)}
   .step:last-child{border-bottom:0}
-  .shot{width:118px;height:74px;border:1px solid var(--line);border-radius:5px;object-fit:cover;object-position:top;
-    background:var(--panel2);cursor:zoom-in}
+  .shot{width:230px;height:150px;border:1px solid var(--line);border-radius:6px;object-fit:cover;object-position:top;
+    background:var(--panel2);cursor:zoom-in;transition:border-color .12s}
+  .shot:hover{border-color:var(--accent)}
   .shot.empty{display:flex;align-items:center;justify-content:center;color:var(--faint);font-size:11px;cursor:default}
   .step .n{font-family:var(--mono);color:var(--faint);font-size:11px}
   .step .act{font-weight:600;margin:1px 0 3px}
@@ -155,15 +161,15 @@
 
     <div class="grid">
       <div>
-        <div class="card">
+        <div class="card c-blue">
           <h2>Detonation timeline <span id="tcount"></span></h2>
           <div class="body" id="timeline"></div>
         </div>
       </div>
       <div>
-        <div class="card"><h2>Exfil</h2><div class="body" id="exfil"></div></div>
-        <div class="card"><h2>Decloak</h2><div class="body" id="decloak"></div></div>
-        <div class="card"><h2>IOCs</h2><div class="body" id="iocs"></div></div>
+        <div class="card c-red"><h2>Exfil</h2><div class="body" id="exfil"></div></div>
+        <div class="card c-teal"><h2>Decloak</h2><div class="body" id="decloak"></div></div>
+        <div class="card c-violet"><h2>IOCs</h2><div class="body" id="iocs"></div></div>
       </div>
     </div>
   </div>
