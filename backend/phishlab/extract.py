@@ -27,6 +27,27 @@ BRANDS = (
 )
 
 
+# Anti-bot / gate fingerprints. If the VICTIM view hits one of these, the page is gated and we
+# likely did NOT reach the real content — report it honestly rather than call the page clean.
+CHALLENGE_MARKERS = {
+    "cloudflare": ("just a moment", "checking your browser", "cf-browser-verification", "cf_chl",
+                   "challenge-platform", "attention required", "__cf_chl", "ray id"),
+    "turnstile": ("cf-turnstile", "challenges.cloudflare.com", "turnstile"),
+    "recaptcha": ("g-recaptcha", "recaptcha/api.js", "grecaptcha"),
+    "hcaptcha": ("h-captcha", "hcaptcha.com"),
+    "datadome": ("datadome", "dd_cookie"),
+    "akamai": ("ak_bmsc", "_abck", "akamai bot"),
+    "imperva": ("_incap_", "incapsula", "imperva"),
+}
+
+
+def detect_challenge(title: str, html: str) -> list[str]:
+    """Anti-bot gate(s) present in the page — Cloudflare/Turnstile/CAPTCHA/etc. Non-empty means the
+    page is gated (detonation likely incomplete)."""
+    blob = ((title or "") + " " + (html or "")).lower()
+    return [name for name, keys in CHALLENGE_MARKERS.items() if any(k in blob for k in keys)]
+
+
 def telegram_channels(html: str) -> list[dict]:
     """Telegram exfil channels found in the page: bot token(s) + any chat_ids."""
     tokens = set(TG_TOKEN.findall(html or "")) | set(TG_API.findall(html or ""))

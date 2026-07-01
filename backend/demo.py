@@ -7,10 +7,16 @@ Run inside an env that has invisible_playwright + Firefox (e.g. the Shadow backe
     python demo.py
 """
 import asyncio
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from phishlab.sandbox import detonate
+
+try:  # Windows consoles default to cp1252 and choke on non-ASCII; the report is UTF-8
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
 
 PORT = 8098
 # a valid-shaped Telegram bot token (bot-id : 35-char secret) — the key exfil IOC

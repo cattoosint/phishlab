@@ -90,7 +90,8 @@ async def detonate(url: str, *, max_steps: int = MAX_STEPS) -> dict:
     t0 = time.time()
     report = {
         "url": url, "started_at": t0, "narration": [], "steps": [],
-        "exfil": {"form_actions": [], "telegram": []}, "iocs": {}, "decloak": None, "verdict": None,
+        "exfil": {"form_actions": [], "telegram": []}, "iocs": {}, "decloak": None,
+        "cloaking": None, "challenge": [], "handover_needed": False, "verdict": None,
     }
     log = report["narration"].append
 
@@ -98,7 +99,16 @@ async def detonate(url: str, *, max_steps: int = MAX_STEPS) -> dict:
         log(f"Detonating {url}")
         vctx, page, dc = await _decloak(brw, url)
         report["decloak"] = dc
-        log(f"Decloak · scanner→{dc['scanner'].get('url')} · victim→{dc['victim'].get('url')} · verdict={dc['cloaked']}")
+        log(f"Decloak - scanner={dc['scanner'].get('url')} victim={dc['victim'].get('url')} verdict={dc['cloaked']}")
+        report["cloaking"] = {
+            "detected": dc["cloaked"].startswith("cloaked"),
+            "kind": dc["cloaked"],
+            "note": {"no_diff": "scanner and victim saw the same page (no cloaking)",
+                     "scanner_blocked": "the bot/scanner view was refused — the site gates bots"}
+                    .get(dc["cloaked"], "bot sees a decoy; victim sees the real page"),
+        }
+        if report["cloaking"]["detected"]:
+            log(f"CLOAKING DETECTED - {dc['cloaked']} (bot is served a decoy; victim gets the real page)")
 
         all_html: list[str] = []
         try:
@@ -107,18 +117,28 @@ async def detonate(url: str, *, max_steps: int = MAX_STEPS) -> dict:
                 all_html.append(snap["html"] or "")
                 forms = await B.detect_forms(page)
                 tg = X.telegram_channels(snap["html"] or "")
+                ch = X.detect_challenge(snap.get("title"), snap.get("html") or "")
                 report["steps"].append({
                     "i": step, "action": "load", "url": snap["url"], "title": snap["title"],
-                    "screenshot": snap["screenshot"], "forms": forms, "telegram": tg,
+                    "screenshot": snap["screenshot"], "forms": forms, "telegram": tg, "challenge": ch,
                 })
                 report["exfil"]["telegram"].extend(tg)
                 report["exfil"]["form_actions"].extend(f.get("action") for f in forms if f.get("action"))
-                log(f"Step {step}: {snap['url']} — “{snap['title']}” · {len(forms)} form(s)"
-                    + (f" · ⚠ TELEGRAM exfil bot {tg[0]['bot_id']}" if tg else ""))
+                for c in ch:
+                    if c not in report["challenge"]:
+                        report["challenge"].append(c)
+                log(f"Step {step}: {snap['url']} - \"{snap['title']}\" - {len(forms)} form(s)"
+                    + (f" - TELEGRAM exfil bot {tg[0]['bot_id']}" if tg else ""))
+                if ch:
+                    # a gate we (probably) can't pass headlessly → hand over to the analyst
+                    report["handover_needed"] = True
+                    log(f"Step {step}: anti-bot gate ({', '.join(ch)}) - automation cannot pass this. "
+                        f"HAND OVER: the analyst solves it in the browser, then automation resumes.")
+                    break
 
                 cred_form = next((f for f in forms if f.get("has_password")), None)
                 if not cred_form:
-                    log("No credential form here — stopping step-through.")
+                    log("No credential form here - stopping step-through.")
                     break
 
                 user, pw = _fake_creds()
@@ -126,8 +146,8 @@ async def detonate(url: str, *, max_steps: int = MAX_STEPS) -> dict:
                 fshot = await B.screenshot_b64(page)
                 dest = cred_form.get("action")
                 off = _host(dest) and _host(dest) != _host(snap["url"])
-                log(f"Step {step}: filled FAKE creds ({user}) → POSTs to {dest}"
-                    + ("  ⚠ OFF-SITE (creds leave to a third party)" if off else ""))
+                log(f"Step {step}: filled FAKE creds ({user}) - POSTs to {dest}"
+                    + ("  [!] OFF-SITE (creds leave to a third party)" if off else ""))
                 report["steps"].append({
                     "i": step, "action": "fill+submit", "filled": filled,
                     "creds_sent_to": dest, "off_site": bool(off), "screenshot": fshot,
