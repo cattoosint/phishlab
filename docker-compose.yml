@@ -1,0 +1,20 @@
+# PhishLab — dev/standalone stack. On the SOC external PC this runs behind the dedicated
+# detonation router. Later phases add the frontend + a persistent volume for cases/screenshots.
+services:
+  phishlab:
+    build: .
+    container_name: phishlab
+    environment:
+      - PHISH_HEADFUL=0
+      # - PHISH_STEALTH=1        # opt-in invisible_playwright real-fingerprint Firefox
+    volumes:
+      - ./backend:/app
+      - phishlab_data:/app/data
+    # Detonation is heavy (a real browser); give it headroom.
+    mem_limit: 2g
+    # For the MVP the CMD runs the engine self-test; swap to the API service in Phase 0.
+    # command: ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]
+    # ports: ["8090:8000"]
+
+volumes:
+  phishlab_data:
