@@ -52,19 +52,28 @@ def _cloak_verdict(sc: dict, vic: dict) -> str:
     return "no_diff"
 
 
-async def _decloak(browser, url: str):
-    """Return (victim_ctx, victim_page, decloak_report). The victim page is left open + loaded."""
-    # scanner view (bot-like) — best-effort; we tolerate it being blocked
+async def scanner_view(browser, url: str) -> dict:
+    """Bot-like fetch for the cloaking differential — best-effort; a block/timeout is tolerated."""
     sc = {"reached": False}
     try:
         sctx = await B.new_scanner_context(browser)
         spg = await sctx.new_page()
-        r = await spg.goto(url, wait_until="domcontentloaded", timeout=B.NAV_TIMEOUT)
+        r = None
+        try:
+            r = await spg.goto(url, wait_until="domcontentloaded", timeout=min(B.NAV_TIMEOUT, 15000))
+        except Exception:
+            pass
         await spg.wait_for_timeout(700)
         sc = {"reached": True, "url": spg.url, "status": (r.status if r else None), "title": await spg.title()}
         await sctx.close()
     except Exception as exc:
         sc["error"] = f"{type(exc).__name__}: {exc}"[:160]
+    return sc
+
+
+async def _decloak(browser, url: str):
+    """Return (victim_ctx, victim_page, decloak_report). The victim page is left open + loaded."""
+    sc = await scanner_view(browser, url)
 
     # victim view (real Firefox) — kept live for detonation
     vctx = await B.new_victim_context(browser)
@@ -79,9 +88,19 @@ async def _decloak(browser, url: str):
             pass
 
     vpg.on("response", _on_resp)
-    r = await vpg.goto(url, wait_until="domcontentloaded", timeout=B.NAV_TIMEOUT)
+    r = None
+    try:
+        r = await vpg.goto(url, wait_until="domcontentloaded", timeout=B.NAV_TIMEOUT)
+    except Exception:
+        # a heavy/slow page (or a hung one) may not fire domcontentloaded in time — DON'T crash the
+        # session; proceed with whatever has rendered so far.
+        pass
     await vpg.wait_for_timeout(SETTLE_MS)
-    vic = {"reached": True, "url": vpg.url, "status": (r.status if r else None), "title": await vpg.title()}
+    try:
+        title = await vpg.title()
+    except Exception:
+        title = ""
+    vic = {"reached": True, "url": vpg.url, "status": (r.status if r else None), "title": title}
 
     verdict = _cloak_verdict(sc, vic)
     return vctx, vpg, {"scanner": sc, "victim": vic, "cloaked": verdict, "redirect_chain": chain[:20]}

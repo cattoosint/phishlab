@@ -14,7 +14,8 @@ import uuid
 from . import browser as B
 from . import enrich as E
 from . import extract as X
-from .sandbox import MAX_STEPS, SETTLE_MS, _decloak, _fake_creds, _host, _snapshot, _verdict
+from .sandbox import (MAX_STEPS, SETTLE_MS, _cloak_verdict, _fake_creds, _host, _snapshot,
+                      _verdict, scanner_view)
 
 FRAME_INTERVAL = 0.4      # ~2.5 fps live view
 FRAME_QUALITY = 66
@@ -83,13 +84,41 @@ class Session:
             async with B.launch() as brw:
                 self.state = "running"
                 self._log(f"Detonating {self.url}")
-                vctx, page, dc = await _decloak(brw, self.url)
+                # Create the victim page + start the LIVE stream BEFORE navigating, so the analyst
+                # watches the page load. A heavy/slow site then looks like it's loading (not blank/
+                # stuck) and a nav timeout no longer crashes the run.
+                vctx = await B.new_victim_context(brw)
+                page = await vctx.new_page()
                 self._page = page
                 try:
                     self.viewport = page.viewport_size or self.viewport
                 except Exception:
                     pass
                 frames = asyncio.create_task(self._frame_loop())
+                chain: list[str] = []
+
+                def _on_resp(resp):
+                    try:
+                        if resp.request.is_navigation_request() and (not chain or chain[-1] != resp.url):
+                            chain.append(resp.url)
+                    except Exception:
+                        pass
+
+                page.on("response", _on_resp)
+                self._log("Loading the page…")
+                r = None
+                try:
+                    r = await page.goto(self.url, wait_until="domcontentloaded", timeout=B.NAV_TIMEOUT)
+                except Exception:
+                    self._log("(page slow to load — continuing with whatever rendered)")
+                await page.wait_for_timeout(SETTLE_MS)
+                sc = await scanner_view(brw, self.url)
+                try:
+                    vtitle = await page.title()
+                except Exception:
+                    vtitle = ""
+                vic = {"reached": True, "url": page.url, "status": (r.status if r else None), "title": vtitle}
+                dc = {"scanner": sc, "victim": vic, "cloaked": _cloak_verdict(sc, vic), "redirect_chain": chain[:20]}
                 self.report["decloak"] = dc
                 self.report["cloaking"] = {"detected": dc["cloaked"].startswith("cloaked"), "kind": dc["cloaked"]}
                 self._log(f"Decloak - scanner={dc['scanner'].get('url')} victim={dc['victim'].get('url')} verdict={dc['cloaked']}")
