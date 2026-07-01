@@ -7,7 +7,7 @@
 <style>
   :root{
     --bg:#10141a; --panel:#171c23; --panel2:#1e242c; --line:#29313b;
-    --text:#e4e8ec; --muted:#8b949e; --faint:#5f6b76;
+    --text:#eef2f5; --muted:#aeb8c1; --faint:#7c8892;
     --accent:#4a9eda; --ok:#3fb27f; --warn:#d99a3a; --bad:#d95f57;
     --mono:ui-monospace,"Cascadia Code","Consolas",monospace;
     --ui:-apple-system,"Segoe UI",Roboto,system-ui,sans-serif;
@@ -107,10 +107,10 @@
   .empty-note{color:var(--faint);font-size:12px;padding:4px 0}
 
   /* console */
-  .console{background:#0b0e12;border:1px solid var(--line);border-radius:8px;padding:12px 14px;
-    font-family:var(--mono);font-size:12px;color:var(--muted);margin-bottom:20px;max-height:190px;overflow:auto}
+  .console{background:#0a0d11;border:1px solid var(--line);border-radius:8px;padding:13px 15px;
+    font-family:var(--mono);font-size:12.5px;line-height:1.65;color:#cfd8df;margin-bottom:20px;max-height:220px;overflow:auto}
   .console div{padding:1px 0;white-space:pre-wrap;word-break:break-word}
-  .console .warnln{color:var(--warn)} .console .telln{color:var(--bad)}
+  .console .warnln{color:#e8b45c} .console .telln{color:#eb7c73;font-weight:600}
 
   /* lightbox */
   #lb{position:fixed;inset:0;background:rgba(6,9,12,.9);display:none;align-items:center;justify-content:center;padding:30px;z-index:9}
