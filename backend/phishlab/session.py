@@ -180,6 +180,12 @@ class Session:
                 x = float(ev.get("x", 0)) * self.viewport["width"]
                 y = float(ev.get("y", 0)) * self.viewport["height"]
                 await pg.mouse.click(x, y)
+            elif t == "scroll":
+                # move the pointer over the target first so the wheel scrolls the right element
+                if ev.get("x") is not None and ev.get("y") is not None:
+                    await pg.mouse.move(float(ev["x"]) * self.viewport["width"],
+                                        float(ev["y"]) * self.viewport["height"])
+                await pg.mouse.wheel(float(ev.get("dx", 0)), float(ev.get("dy", 0)))
             elif t == "type":
                 await pg.keyboard.type(str(ev.get("text", "")))
             elif t == "key":
