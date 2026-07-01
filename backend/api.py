@@ -22,9 +22,11 @@ class DetonateReq(BaseModel):
     url: str = Field(min_length=1, max_length=4000)
 
 
-@app.get("/", response_class=HTMLResponse)
-async def index() -> str:
-    return (WEB / "index.html").read_text(encoding="utf-8")
+@app.get("/")
+async def index() -> HTMLResponse:
+    # no-store so the browser never serves a stale GUI after an update
+    return HTMLResponse((WEB / "index.html").read_text(encoding="utf-8"),
+                        headers={"Cache-Control": "no-store, max-age=0"})
 
 
 @app.get("/api/health")
