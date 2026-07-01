@@ -73,8 +73,26 @@
 - Alerts/notification when a tracked site flips UP→DOWN (takedown success) — and optionally DOWN→UP (it came back / new host).
 - Feeds the SOC report ("reported 2026-07-01, taken down 2026-07-03, alive 2 days").
 
+**H. Phishing-kit extraction**
+- After detonation, try to retrieve the KIT ITSELF: the deployed archive left in the web root (kits
+  are often just an unzipped `.zip` still sitting there), open-directory listings, and exposed
+  source/backup copies (`.bak`, `~`, `.txt`, `.save`, `.old` of the PHP).
+- Statically analyze the recovered kit: exfil channels (Telegram tokens, hardcoded e-mail / PHP-mailer
+  config, C2 URLs), targeted brands, the kit's own anti-bot/cloaking **blocklist** (which scanner
+  IP/UA ranges it refuses), and actor/kit-family **fingerprints** (author strings, comments, kit name).
+- Yields deep IOCs + attribution + kit-family tracking; feeds the report and the takedown case.
+
+**I. Live interactive handover (analyst takeover, in-app)**
+- A detonation runs as a **live session**: the browser streams to the GUI over a WebSocket (a live
+  pane next to the step screenshots) — the analyst watches it happen.
+- When an anti-bot gate is detected (Cloudflare/Turnstile/CAPTCHA the sandbox can't clear), automation
+  **pauses** and the live pane goes **interactive**: clicks/keystrokes are forwarded to the browser so
+  the analyst solves the gate **inside the app** — no stepping out, no separate window.
+- **Resume** → the robotic step-through continues from the now-unlocked page. This is what makes
+  Cloudflare/CAPTCHA handleable end-to-end (solve-by-human instead of a solver service).
+
 **F. Security / anonymity (cross-cutting)**
-- Tor egress with per-detonation circuit rotation (randomized IP); proxy/VPN fallback.
+- Egress on the dedicated detonation line (see §1); optional proxy/Tor as a second vantage point.
 - Disposable profiles, no real data, DNS-leak prevention, network kill-switch, air-gap-friendly.
 
 ---
@@ -88,13 +106,15 @@
 | **0 — Shell** | Desktop scaffold (Tauri/Electron) + bundled local FastAPI + SQLite + bundled Playwright Firefox. URL-in → result-out plumbing. | Installable empty app that can open a page + screenshot it. | 3–5 days |
 | **1 — Detonation core (MVP)** | Decloak + robotic step-through (detect form → fake creds → submit → follow) + screenshot-every-step timeline + live narration + capture form fields/actions. | Paste a URL → watch it detonate step-by-step with screenshots. | 1–1.5 wks |
 | **2 — Exfil + IOC** | Telegram token/chat-id extraction, exfil-destination detection, IOC aggregation, brand/favicon impersonation. | "Creds captured by this Telegram bot / this host" + IOC list. | 4–6 days |
+| **2b — Phishing-kit extraction** | Retrieve the kit (left-behind archive / open directory / exposed source-backups) and statically analyze it for exfil channels, targeted brands, the anti-bot blocklist, and actor/kit-family fingerprints. | The actual kit source + deep IOCs + attribution. | ~1 wk |
 | **3 — Enrichment** | WHOIS/RDAP, cert transparency, IP/ASN/GreyNoise, Fortinet/Safe-Browsing/VT/blocklist lookups, risk-score + verdict model. | A scored verdict with full context. | ~1 wk |
-| **4 — Anonymity + hardening** | Bundle Tor, per-run circuit rotation, proxy/VPN fallback, disposable profiles, DNS-leak/kill-switch. | Randomized, leak-proof egress. | 4–6 days |
+| **4 — Anonymity + hardening** | Egress on the dedicated line; optional proxy/vantage; disposable profiles, DNS-leak/kill-switch. | Leak-proof, dedicated-line egress. | 4–6 days |
+| **4b — Live interactive handover** | Turn detonation into a live session: stream the browser to the GUI (WebSocket) + forward clicks/keys + pause/resume, so the analyst solves a Cloudflare/Turnstile gate **in-app** and automation resumes. No stepping out. | Watch + take over a detonation live. | 1–1.5 wks |
 | **5 — Reporting + takedown** | SOC report (HTML/PDF) + auto-submit to Safe Browsing / Microsoft / Fortinet (+ optional Netcraft/APWG/PhishTank). | One-click "report + takedown". | ~1 wk |
 | **5b — Takedown tracker** | Tracker tab: every reported site tracked; background pinger (~30 min) records up/down + latency + suspended-page check; UP→DOWN alerts; uptime-since-report. (Reuses the Shadow-style monitoring scheduler.) | Live board of every reported site + "taken down" status. | 4–6 days |
 | **6 — Polish + packaging** | Case history/search, config (keys, proxy/vantage toggle, report toggles), signed Windows installer. | Distributable v1. | 3–5 days |
 
-**Total: ~6–8 weeks to a solid v1.** (A demoable MVP = Phases 0–2, ~3 weeks.)
+**Total: ~8–10 weeks to a solid v1** (with kit-extraction + live handover). A demoable MVP (Phases 0–2) ≈ 3 weeks; **Phase 1 detonation core is already built + working.**
 
 ---
 
