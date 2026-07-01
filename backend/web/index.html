@@ -82,6 +82,7 @@
   .card.c-teal{border-left:3px solid #46c7c0}   .card.c-teal>h2{color:#63d3cc}
   .card.c-red{border-left:3px solid #e5766b}    .card.c-red>h2{color:#ef938a}
   .card.c-violet{border-left:3px solid #9b8cf0} .card.c-violet>h2{color:#b3a8f5}
+  .card.c-amber{border-left:3px solid #d99a3a}  .card.c-amber>h2{color:#e8b45c}
 
   /* timeline / evidence strip */
   .step{display:grid;grid-template-columns:230px 1fr;gap:18px;padding:16px 0;border-bottom:1px solid var(--line)}
@@ -163,7 +164,7 @@
       <button class="go" id="resume" style="display:none;padding:7px 16px">▶ Resume automation</button>
       <span class="live-hint" id="lhint"></span>
     </div>
-    <div class="live-stage" id="lstage"><img id="limg" alt="live detonation" tabindex="0"></div>
+    <div class="live-stage" id="lstage"><img id="limg" alt="" tabindex="0"></div>
     <div class="console" id="lconsole" style="margin-top:12px;max-height:150px"></div>
   </div>
 
@@ -191,6 +192,7 @@
         </div>
       </div>
       <div>
+        <div class="card c-amber"><h2>Enrichment</h2><div class="body" id="enrich"></div></div>
         <div class="card c-red"><h2>Exfil</h2><div class="body" id="exfil"></div></div>
         <div class="card c-teal"><h2>Decloak</h2><div class="body" id="decloak"></div></div>
         <div class="card c-violet"><h2>IOCs</h2><div class="body" id="iocs"></div></div>
@@ -215,9 +217,11 @@ function conLines(lines){ return (lines||[]).map(l=>{const c=/TELEGRAM/.test(l)?
 async function detonate(){
   const url = $('#url').value.trim();
   if(!url) return;
+  if(_poll){ clearInterval(_poll); _poll=null; } _sid=null;   // stop any prior live session cleanly
   $('#go').disabled=true; $('#out').className=''; clearStatus();
   $('#live').className='live on'; $('#lconsole').innerHTML=''; $('#limg').removeAttribute('src');
-  $('#lhint').textContent='Starting…'; $('#ls').textContent='starting'; $('#ls').className='ls';
+  $('#lhint').textContent='Launching browser…'; $('#ls').textContent='starting'; $('#ls').className='ls';
+  $('#takeover').style.display='none'; $('#resume').style.display='none';
   try{
     const r=await fetch('/api/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})});
     const d=await r.json();
@@ -229,8 +233,9 @@ async function detonate(){
 function _startPoll(sid){
   let done=false;
   _poll=setInterval(async ()=>{
-    $('#limg').src='/api/session/'+sid+'/frame?t='+Date.now();   // live frame
+    if(_sid!==sid){ clearInterval(_poll); return; }        // a newer session superseded this poll
     let s; try{ s=await (await fetch('/api/session/'+sid)).json(); }catch(e){ return; }
+    if(s.has_frame) $('#limg').src='/api/session/'+sid+'/frame?t='+Date.now();   // only load a real frame
     const rep=s.report||{};
     const lc=$('#lconsole'); lc.innerHTML=conLines(rep.narration); lc.scrollTop=lc.scrollHeight;
     const hv=(s.state==='handover');
@@ -322,6 +327,20 @@ function render(rep){
         <ul class="list">${tels.map(t=>`<li class="tel-row">bot ${esc(t.bot_id)} · <span style="color:var(--muted)">${esc(t.bot_token)}</span>${(t.chat_ids||[]).length?` · chat ${esc((t.chat_ids||[]).join(', '))}`:''}</li>`).join('')}</ul></div>`:''}
        ${acts.length?`<div class="kv"><span class="k">Credentials POST to</span></div><ul class="list">${acts.map(a=>`<li>${esc(a)}</li>`).join('')}</ul>`:''}`
     : `<div class="empty-note">No exfil channel captured.</div>`;
+
+  // enrichment
+  const en=rep.enrichment||{}, rd=en.rdap||{}, ipx=en.ip||{}, uh=en.urlhaus||{}, ct=en.cert||{};
+  const young=(typeof rd.age_days==='number'&&rd.age_days<30);
+  $('#enrich').innerHTML = en.host ? (
+    `<div class="kv"><span class="k">domain age</span><span class="v" style="${young?'color:var(--bad)':''}">${rd.age_days!=null?rd.age_days+' days'+(young?' ⚠':''):'—'}</span></div>`+
+    `<div class="kv"><span class="k">registered</span><span class="v">${esc((rd.created||'').slice(0,10)||'—')}</span></div>`+
+    `<div class="kv"><span class="k">registrar</span><span class="v">${esc(rd.registrar||'—')}</span></div>`+
+    `<div class="kv"><span class="k">hosting</span><span class="v">${esc(ipx.org||ipx.isp||'—')}</span></div>`+
+    `<div class="kv"><span class="k">asn · geo</span><span class="v">${esc((ipx.asn||'—').split(',')[0])} · ${esc(ipx.country||'—')}</span></div>`+
+    `<div class="kv"><span class="k">ip</span><span class="v">${esc(ipx.ip||'—')}</span></div>`+
+    `<div class="kv"><span class="k">blocklist</span><span class="v" style="${uh.listed?'color:var(--bad)':''}">${uh.listed?('URLhaus LISTED'+(uh.threat?' ('+esc(uh.threat)+')':'')):(uh.listed===false?'not listed':'—')}</span></div>`+
+    `<div class="kv"><span class="k">newest cert</span><span class="v">${esc((ct.newest||'').slice(0,10)||'—')}</span></div>`
+  ) : `<div class="empty-note">No enrichment.</div>`;
 
   // decloak
   const dc=rep.decloak||{};

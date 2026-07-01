@@ -18,6 +18,7 @@ import time
 from urllib.parse import urlsplit
 
 from . import browser as B
+from . import enrich as E
 from . import extract as X
 
 MAX_STEPS = 6
@@ -168,6 +169,10 @@ async def detonate(url: str, *, max_steps: int = MAX_STEPS) -> dict:
             except Exception:
                 pass
 
+    try:
+        report["enrichment"] = await E.enrich(url)
+    except Exception:
+        report["enrichment"] = {}
     report["verdict"] = _verdict(report)
     report["elapsed"] = round(time.time() - t0, 1)
     return report
@@ -192,6 +197,9 @@ def _verdict(r: dict) -> dict:
     if brands:
         score += 15
         reasons.append("brand impersonation: " + ", ".join(brands))
+    for sc, rs in E.score_signals(r.get("enrichment") or {}):
+        score += sc
+        reasons.append(rs)
     score = min(score, 100)
     label = ("confirmed_phishing" if score >= 80 else
              "likely_phishing" if score >= 45 else

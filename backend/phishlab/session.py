@@ -12,6 +12,7 @@ import time
 import uuid
 
 from . import browser as B
+from . import enrich as E
 from . import extract as X
 from .sandbox import MAX_STEPS, SETTLE_MS, _decloak, _fake_creds, _host, _snapshot, _verdict
 
@@ -156,6 +157,11 @@ class Session:
                     *[s.get("title", "") for s in self.report["steps"]], joined[:20000])
                 await vctx.close()
 
+            self._log("Enriching - domain age, hosting, blocklists…")
+            try:
+                self.report["enrichment"] = await E.enrich(self.url)
+            except Exception:
+                self.report["enrichment"] = {}
             self.report["verdict"] = _verdict(self.report)
             self.report["elapsed"] = round(time.time() - t0, 1)
             self.state = "done"
