@@ -166,6 +166,7 @@
   .mail-row .mu{flex:1;min-width:0}
   .mail-row .u{font-family:var(--mono);font-size:12.5px;word-break:break-all}
   .mail-row .mv{font-family:var(--mono);font-size:11px;font-weight:700;white-space:nowrap;text-align:right}
+  .name-edit{background:var(--bg);border:1px solid var(--accent);border-radius:5px;color:var(--text);font-family:var(--ui);font-size:13px;font-weight:700;padding:3px 8px;min-width:200px;outline:none}
 
   /* console */
   .console{background:#0a0d11;border:1px solid var(--line);border-radius:8px;padding:13px 15px;
@@ -595,8 +596,8 @@ function renderTracker(d){
     return `<div class="case">
       <div class="trk ${dn?'down':'up'} ${taken?'taken':''}" onclick="toggleViews(this,'${enc}')">
         <div>
-          <div style="display:flex;align-items:center;gap:6px"><b style="font-size:13px">${esc(s.name||host(s.url))}</b>
-            <button class="cbtn" onclick="event.stopPropagation();renameCase('${enc}','${encodeURIComponent(s.name||'')}')">rename</button></div>
+          <div style="display:flex;align-items:center;gap:6px"><b class="case-name" style="font-size:13px">${esc(s.name||host(s.url))}</b>
+            <button class="cbtn" onclick="event.stopPropagation();renameCase(this,'${enc}','${encodeURIComponent(s.name||'')}')">rename</button></div>
           <div class="u" style="margin-top:3px">${esc(s.url)}</div>
           <div style="color:var(--faint);font-size:11px;margin-top:3px">first seen ${ago(s.first_seen)}${van?' · '+van:''}${s.geo_cloaked?' · <span class="cloak">⚠ geo-cloaked</span>':''}</div>
         </div>
@@ -625,16 +626,27 @@ async function toggleViews(rowEl, enc){
   }catch(e){ panel.innerHTML='<div class="empty-note" style="padding:14px">Could not capture views.</div>'; }
 }
 async function markPhishing(rep, v){
-  const def=host(rep.url);
-  const name=prompt('Case name / reference (e.g. SOC#123456):', def);
-  if(name===null) return;
+  const def=host(rep.url);   // saved with the host as the name; rename inline in Cases & tracker
   await fetch('/api/tracker',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({url:rep.url, name:name||def, verdict:(v||{}).label, score:(v||{}).score})}).catch(()=>{});
-  const mb=$('#markbtn'); mb.className='mark saved'; mb.textContent='✓ Saved as case — monitoring'; mb.onclick=null;
+    body:JSON.stringify({url:rep.url, name:def, verdict:(v||{}).label, score:(v||{}).score})}).catch(()=>{});
+  const mb=$('#markbtn'); mb.className='mark saved'; mb.textContent='✓ Saved as case — rename it in “Cases & tracker”'; mb.onclick=null;
   loadTracker();
 }
-async function renameCase(u,cur){ const n=prompt('Rename case:', decodeURIComponent(cur||'')); if(n===null) return;
-  await fetch('/api/tracker/rename',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:decodeURIComponent(u),name:n})}); loadTracker(); }
+// inline rename — no browser popup: the name becomes an editable field in place
+function renameCase(btn, encUrl, encCur){
+  const row=btn.closest('.trk'), nameEl=row&&row.querySelector('.case-name'); if(!nameEl) return;
+  const cur=decodeURIComponent(encCur||'') || nameEl.textContent;
+  const inp=document.createElement('input'); inp.type='text'; inp.value=cur; inp.className='name-edit';
+  let saved=false;
+  const commit=async(save)=>{ if(saved) return; saved=true;
+    const nn=(inp.value||'').trim();
+    if(save && nn && nn!==cur){ try{ await fetch('/api/tracker/rename',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:decodeURIComponent(encUrl),name:nn})}); }catch(e){} }
+    loadTracker(true); };
+  inp.onclick=(e)=>e.stopPropagation();
+  inp.onkeydown=(e)=>{ e.stopPropagation(); if(e.key==='Enter'){e.preventDefault();commit(true);} else if(e.key==='Escape'){e.preventDefault();commit(false);} };
+  inp.onblur=()=>commit(true);
+  nameEl.replaceWith(inp); inp.focus(); inp.select();
+}
 async function confirmCase(u){ await fetch('/api/tracker/confirm?url='+u,{method:'POST'}); loadTracker(); }
 async function rmTrk(u,btn){ const c=btn&&btn.closest('.case'); if(c) c.remove();   // instant
   try{ await fetch('/api/tracker?url='+u,{method:'DELETE'}); }catch(e){} loadTracker(true); }
@@ -644,18 +656,14 @@ loadTracker();   // live refresh handled by _tick()
 // ── in-app takedown reporting (opens the report form in the live frame, hand off for CAPTCHA) ──
 async function startReport(key,name){
   const url=window._curUrl; if(!url) return;
+  const btn=(window.event&&window.event.target)||null;
+  if(btn){ const o=btn.textContent; btn.disabled=true; btn.textContent='window opened ↗';
+           setTimeout(()=>{btn.disabled=false;btn.textContent=o;},4000); }
+  // reporting opens a REAL browser window on the desktop — do NOT touch the analysis view in PhishLab
   try{
-    const r=await (await fetch('/api/report',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url,target:key})})).json();
-    if(r.id){
-      if(_poll){clearInterval(_poll);_poll=null;}
-      _sid=r.id; window._repSid=null;
-      $('#live').className='live on'; $('#lconsole').innerHTML=''; $('#limg').removeAttribute('src');
-      $('#lhint').textContent='Reporting to '+name+'…'; $('#ls').textContent='reporting'; $('#ls').className='ls';
-      $('#takeover').style.display='none'; $('#resume').style.display='none';
-      _startPoll(r.id);
-      document.getElementById('live').scrollIntoView({behavior:'smooth',block:'start'});
-    }
-  }catch(e){}
+    await fetch('/api/report',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url,target:key})});
+    setStatus('Report window opened on your desktop for '+name+' — complete + submit there, then close that window. (Your analysis here stays open.)');
+  }catch(e){ setStatus('Could not open the report window.',true); }
 }
 
 // health dot
