@@ -115,6 +115,8 @@
 
   .grid{display:grid;grid-template-columns:1fr 340px;gap:20px}
   @media(max-width:880px){.grid{grid-template-columns:1fr}}
+  .panels{display:grid;grid-template-columns:repeat(auto-fit,minmax(285px,1fr));gap:16px;align-items:start;margin-bottom:20px}
+  .panels .card{margin:0}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden;margin-bottom:20px}
   .card h2{font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);
     margin:0;padding:12px 15px;border-bottom:1px solid var(--line);font-weight:600}
@@ -246,23 +248,20 @@
 
     <div class="console" id="console"></div>
 
-    <div class="grid">
-      <div>
-        <div class="card c-blue">
-          <h2>Detonation timeline <span id="tcount"></span></h2>
-          <div class="body" id="timeline"></div>
-        </div>
-      </div>
-      <div>
-        <div class="card c-key"><h2>Takedown</h2><div class="body" id="report"></div></div>
-        <div class="card c-rose"><h2>Code analysis</h2><div class="body" id="indicators"></div></div>
-        <div class="card c-amber"><h2>Enrichment</h2><div class="body" id="enrich"></div></div>
-        <div class="card c-red"><h2>Exfil</h2><div class="body" id="exfil"></div></div>
-        <div class="card c-green"><h2>Phishing kit</h2><div class="body" id="kit"></div></div>
-        <div class="card c-teal"><h2>Decloak</h2><div class="body" id="decloak"></div></div>
-        <div class="card c-blue"><h2>Network · routing</h2><div class="body" id="network"></div></div>
-        <div class="card c-violet"><h2>IOCs</h2><div class="body" id="iocs"></div></div>
-      </div>
+    <div class="panels">
+      <div class="card c-key"><h2>Takedown</h2><div class="body" id="report"></div></div>
+      <div class="card c-rose"><h2>Code analysis</h2><div class="body" id="indicators"></div></div>
+      <div class="card c-red"><h2>Exfil</h2><div class="body" id="exfil"></div></div>
+      <div class="card c-amber"><h2>Enrichment</h2><div class="body" id="enrich"></div></div>
+      <div class="card c-green"><h2>Phishing kit</h2><div class="body" id="kit"></div></div>
+      <div class="card c-teal"><h2>Decloak</h2><div class="body" id="decloak"></div></div>
+      <div class="card c-blue"><h2>Network · routing</h2><div class="body" id="network"></div></div>
+      <div class="card c-violet"><h2>IOCs</h2><div class="body" id="iocs"></div></div>
+    </div>
+
+    <div class="card c-blue">
+      <h2>Detonation timeline <span id="tcount"></span></h2>
+      <div class="body" id="timeline"></div>
     </div>
   </div>
   </div><!-- /view-analyze -->
