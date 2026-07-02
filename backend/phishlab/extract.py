@@ -74,6 +74,17 @@ def brand_hits(*texts: str) -> list[str]:
     return sorted({b for b in BRANDS if re.search(r"\b" + re.escape(b) + r"\b", blob)})
 
 
+_WAIT_RE = re.compile(
+    r"please wait|verifying your|redirecting|one moment|just a (?:moment|second)|checking your browser|"
+    r"do not (?:close|refresh)|processing your|hold on|we(?:'| a)re (?:verifying|checking|processing)|"
+    r"please hold|loading\.\.\.|redirect you", re.I)
+
+
+def is_wait_page(title: str | None, html: str | None) -> bool:
+    """A 'please wait / verifying / redirecting' interstitial the walker should sit through."""
+    return bool(_WAIT_RE.search(((title or "") + " " + (html or ""))[:6000]))
+
+
 def iocs(html: str, page_url: str, extra_urls=()) -> dict:
     """Aggregate IOCs from the page source + any extra (e.g. form-action) URLs."""
     hosts, ips, emails = set(), set(), set()

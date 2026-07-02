@@ -127,6 +127,7 @@
   .card.c-violet{border-left:3px solid #9b8cf0} .card.c-violet>h2{color:#b3a8f5}
   .card.c-amber{border-left:3px solid #d99a3a}  .card.c-amber>h2{color:#e8b45c}
   .card.c-green{border-left:3px solid #3fb27f}  .card.c-green>h2{color:#5fc795}
+  .card.c-rose{border-left:3px solid #d072b0}   .card.c-rose>h2{color:#e08ec5}
 
   /* timeline / evidence strip */
   .step{display:grid;grid-template-columns:230px 1fr;gap:18px;padding:16px 0;border-bottom:1px solid var(--line)}
@@ -241,6 +242,7 @@
         </div>
       </div>
       <div>
+        <div class="card c-rose"><h2>Code analysis</h2><div class="body" id="indicators"></div></div>
         <div class="card c-amber"><h2>Enrichment</h2><div class="body" id="enrich"></div></div>
         <div class="card c-red"><h2>Exfil</h2><div class="body" id="exfil"></div></div>
         <div class="card c-green"><h2>Phishing kit</h2><div class="body" id="kit"></div></div>
@@ -365,11 +367,14 @@ function render(rep){
       :`<div class="shot empty">no shot</div>`;
     let right='';
     if(s.action==='fill+submit'){
-      const off=s.off_site?'<span class="flag hz">creds leave off-site</span>':'';
+      const off=s.off_site?'<span class="flag hz">data leaves off-site</span>':'';
+      const ff=s.filled_fields||[];
+      const entered=ff.length?ff.map(f=>`${esc(f.kind)}: <b>${esc(f.value)}</b>`).join(' · '):'fake credentials';
       right=`<div class="n">step ${s.i} · fill + submit</div>
-        <div class="act">Filled fake credentials → submitted</div>
-        <div class="u">POSTs to <b>${esc(s.creds_sent_to||'—')}</b></div>
-        <div class="flags"><span class="flag hz">fake creds entered</span>${off}</div>`;
+        <div class="act">Entered ${ff.length?ff.length+' field(s)':'credentials'} → submitted</div>
+        <div class="u" style="line-height:1.7">${entered}</div>
+        <div class="u">→ <b>${esc(s.creds_sent_to||'—')}</b></div>
+        <div class="flags"><span class="flag hz">fake data entered</span>${off}</div>`;
     }else{
       const tel=(s.telegram||[]).length?`<span class="flag tel">telegram bot ${esc((s.telegram[0]||{}).bot_id||'')}</span>`:'';
       const fc=(s.forms||[]).length?`<span class="flag">${s.forms.length} form(s)</span>`:'';
@@ -413,6 +418,14 @@ function render(rep){
     if(kt.saved_to) kh+=`<div class="kv"><span class="k">files saved to</span><span class="v" style="color:#5fc795">${esc(kt.saved_to)}</span></div>`;
     $('#kit').innerHTML=kh||'<div class="empty-note">—</div>';
   }
+
+  // code analysis — read from the full page source ("is it fake")
+  const an=rep.indicators||{}, inds=an.indicators||[], cts=an.counts||{};
+  const sevcol={high:'var(--bad)',medium:'var(--warn)',low:'var(--muted)'};
+  $('#indicators').innerHTML = inds.length ? (
+    `<div class="kv"><span class="k">indicators</span><span class="v"><span style="color:var(--bad)">${cts.high||0} high</span> · ${cts.medium||0} med · ${cts.low||0} low</span></div>`+
+    `<ul class="list">${inds.map(i=>`<li><span style="color:${sevcol[i.severity]||'var(--muted)'};font-family:var(--mono);font-size:11px">[${esc(i.severity)}]</span> ${esc(i.title)}${i.evidence?`<br><span style="color:var(--faint);font-family:var(--mono);font-size:11px">${esc(i.evidence)}</span>`:''}</li>`).join('')}</ul>`
+  ) : (rep.indicators ? '<div class="empty-note">No phishing indicators found in the source.</div>' : '<div class="empty-note">—</div>');
 
   // enrichment
   const en=rep.enrichment||{}, rd=en.rdap||{}, ipx=en.ip||{}, uh=en.urlhaus||{}, ct=en.cert||{};

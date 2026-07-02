@@ -20,6 +20,7 @@ from urllib.parse import urlsplit
 from . import browser as B
 from . import enrich as E
 from . import extract as X
+from . import indicators as I
 from . import kit as K
 
 MAX_STEPS = 6
@@ -30,6 +31,14 @@ def _fake_creds() -> tuple[str, str]:
     u = "".join(random.choice(string.ascii_lowercase) for _ in range(8))
     p = "".join(random.choice(string.ascii_letters + string.digits) for _ in range(12))
     return f"{u}@examplemail.com", p
+
+
+def _fake_identity() -> dict:
+    """A full set of DISPOSABLE fake inputs for any field the kit asks for — never real data."""
+    email, pw = _fake_creds()
+    return {"user": email.split("@")[0], "email": email, "pw": pw,
+            "phone": "+1 202 555 0" + "".join(random.choice(string.digits) for _ in range(3)),
+            "otp": "".join(random.choice(string.digits) for _ in range(6)), "text": "N/A"}
 
 
 def _host(u: str) -> str:
@@ -184,6 +193,7 @@ async def detonate(url: str, *, max_steps: int = MAX_STEPS) -> dict:
             report["iocs"] = X.iocs(joined, url, extra_urls=[a for a in report["exfil"]["form_actions"] if a])
             # brands from TITLES only (page markup legitimately mentions Google/Facebook for OAuth)
             report["iocs"]["brands_impersonated"] = X.brand_hits(*[s.get("title", "") for s in report["steps"]])
+            report["indicators"] = I.analyze_source(joined, url)   # read the whole source for phishing tells
             try:
                 await vctx.close()
             except Exception:
@@ -239,6 +249,9 @@ def _verdict(r: dict) -> dict:
         score += sc
         reasons.append(rs)
     for sc, rs in K.score_signals(r.get("kit") or {}):
+        score += sc
+        reasons.append(rs)
+    for sc, rs in I.score_signals(r.get("indicators") or {}):
         score += sc
         reasons.append(rs)
     score = min(score, 100)

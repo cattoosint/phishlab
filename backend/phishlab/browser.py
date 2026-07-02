@@ -109,6 +109,84 @@ async def fill_credentials(page, user: str, pw: str) -> dict:
         return {"password": False, "user": False, "extra": 0}
 
 
+_FILL_ANY_JS = """(fake) => {
+  const out = [];
+  const set = (e, val, kind) => {
+    try {
+      e.focus(); e.value = val;
+      e.dispatchEvent(new Event('input', {bubbles: true}));
+      e.dispatchEvent(new Event('change', {bubbles: true}));
+      out.push({name: e.name || e.id || '', type: (e.type || '').toLowerCase(), kind, value: val});
+    } catch (_) {}
+  };
+  for (const e of document.querySelectorAll('input, textarea')) {
+    const t = (e.type || '').toLowerCase();
+    if (e.disabled || e.readOnly || ['hidden','submit','button','checkbox','radio','file','image','reset'].includes(t)) continue;
+    if (e.value && t !== 'password') continue;   // don't clobber prefilled fields (except password)
+    const n = ((e.name||'')+' '+(e.id||'')+' '+(e.placeholder||'')+' '+(e.getAttribute('aria-label')||'')+' '+(e.autocomplete||'')).toLowerCase();
+    if (t === 'password' || /passw|pwd/.test(n)) set(e, fake.pw, 'password');
+    else if (t === 'email' || /email|e-mail/.test(n)) set(e, fake.email, 'email');
+    else if (t === 'tel' || /phone|mobile|\btel\b/.test(n)) set(e, fake.phone, 'phone');
+    else if (/otp|\bcode\b|token|2fa|otc|verif|\bpin\b|security code|one.?time/.test(n)) set(e, fake.otp, 'otp/code');
+    else if (/user|login|account|username|\bid\b/.test(n)) set(e, fake.user, 'username');
+    else if (t === 'number') set(e, fake.otp, 'number');
+    else if (t === 'text' || t === 'search' || t === '' || e.tagName === 'TEXTAREA') set(e, fake.text, 'text');
+  }
+  return out;
+}"""
+
+# a "please wait / verifying / redirecting" interstitial the walker should sit through, not stop at
+_WAIT_RE = None
+
+
+async def fill_fields(page, fake: dict) -> list[dict]:
+    """Fill EVERY fillable input with type-appropriate FAKE data (password, email, phone, OTP/code,
+    username, free text). Returns a list of what was filled — so the analyst sees each entry."""
+    try:
+        return await page.evaluate(_FILL_ANY_JS, fake)
+    except Exception:
+        return []
+
+
+async def click_advance(page) -> str | None:
+    """Advance the flow: click the most likely 'go' control — submit, or a button/link whose text is
+    continue/next/verify/sign in/log in/proceed/confirm/submit. Returns the label clicked."""
+    # 1) a real submit control
+    for sel in ("button[type=submit]", "input[type=submit]"):
+        try:
+            el = await page.query_selector(sel)
+            if el and await el.is_visible():
+                label = (await el.inner_text() if sel.startswith("button") else await el.get_attribute("value")) or "submit"
+                await el.click(timeout=5000)
+                return label.strip()[:40]
+        except Exception:
+            continue
+    # 2) a button/link/role=button whose text reads like an advance action
+    try:
+        cand = await page.evaluate("""() => {
+          const rx = /continue|next|verify|sign\\s*in|log\\s*in|proceed|confirm|submit|weiter|siguiente/i;
+          const els = Array.from(document.querySelectorAll('button, a, [role=button], input[type=button]'));
+          for (const e of els) {
+            const txt = (e.innerText || e.value || '').trim();
+            if (rx.test(txt) && e.offsetParent !== null) return txt.slice(0, 40);
+          }
+          return null;
+        }""")
+    except Exception:
+        cand = None
+    if cand:
+        try:
+            await page.get_by_text(cand, exact=False).first.click(timeout=5000)
+            return cand
+        except Exception:
+            pass
+    try:
+        await page.keyboard.press("Enter")
+        return "Enter"
+    except Exception:
+        return None
+
+
 async def submit_form(page) -> bool:
     """Submit — prefer clicking a submit control (triggers the kit's JS handlers) then Enter."""
     for sel in ("button[type=submit]", "input[type=submit]", "form button", "[role=button]"):
