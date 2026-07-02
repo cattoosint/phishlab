@@ -297,13 +297,19 @@ async function detonate(){
 
 function _startPoll(sid){
   let done=false;
+  // fast, adaptive FRAME loop — decoupled from the heavy state poll so it's ~9fps while you drive
+  (function frameTick(){
+    if(_sid!==sid) return;
+    if(window._hasFrame) $('#limg').src='/api/session/'+sid+'/frame?t='+Date.now();
+    setTimeout(frameTick, window._hv?110:450);
+  })();
   _poll=setInterval(async ()=>{
     if(_sid!==sid){ clearInterval(_poll); return; }        // a newer session superseded this poll
     let s; try{ s=await (await fetch('/api/session/'+sid)).json(); }catch(e){ return; }
-    if(s.has_frame) $('#limg').src='/api/session/'+sid+'/frame?t='+Date.now();   // only load a real frame
+    window._hasFrame=s.has_frame;
     const rep=s.report||{};
     const lc=$('#lconsole'); lc.innerHTML=conLines(rep.narration); lc.scrollTop=lc.scrollHeight;
-    const hv=(s.state==='handover'); const isRep=rep.kind==='report';
+    const hv=(s.state==='handover'); const isRep=rep.kind==='report'; window._hv=hv;
     $('#ls').textContent=hv?'you have control':s.state; $('#ls').className='ls'+(hv?' hv':'');
     $('#lstage').className='live-stage'+(hv?' hv':'');
     $('#takeover').style.display=(s.state==='running'&&!isRep)?'inline-flex':'none';
@@ -433,7 +439,7 @@ function render(rep){
       window._curUrl=rep.url;
       if(window._repSid!==rsid){ window._repSid=rsid;
         fetch('/api/session/'+rsid+'/targets').then(r=>r.json()).then(d=>{
-          const inapp=['safebrowsing','microsoft','netcraft'];
+          const inapp=['safebrowsing','microsoft'];
           rp.innerHTML=`<div class="kv"><span class="k">report the URL to</span></div>`+
             `<ul class="list">${(d.targets||[]).map(x=>{
               const b=inapp.includes(x.key)?` <button class="cbtn" onclick="startReport('${x.key}','${esc(x.name).replace(/'/g,'')}')">report in-app ▶</button>`:'';

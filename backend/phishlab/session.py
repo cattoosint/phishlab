@@ -89,7 +89,8 @@ class Session:
                     self.latest_frame = await pg.screenshot(type="jpeg", quality=FRAME_QUALITY)
                 except Exception:
                     pass   # screenshots can fail mid-navigation; just skip the frame
-            await asyncio.sleep(FRAME_INTERVAL)
+            # stream fast while the analyst is driving (handover), slower while automation runs
+            await asyncio.sleep(0.12 if self.state == "handover" else FRAME_INTERVAL)
 
     async def run(self):
         t0 = self.report["started_at"]
@@ -310,11 +311,18 @@ class Session:
                 y = float(ev.get("y", 0)) * self.viewport["height"]
                 await pg.mouse.click(x, y)
             elif t == "scroll":
-                # move the pointer over the target first so the wheel scrolls the right element
-                if ev.get("x") is not None and ev.get("y") is not None:
-                    await pg.mouse.move(float(ev["x"]) * self.viewport["width"],
-                                        float(ev["y"]) * self.viewport["height"])
-                await pg.mouse.wheel(float(ev.get("dx", 0)), float(ev.get("dy", 0)))
+                dx, dy = float(ev.get("dx", 0)), float(ev.get("dy", 0))
+                try:
+                    await pg.evaluate("([x, y]) => window.scrollBy(x, y)", [dx, dy])  # reliable in Firefox
+                except Exception:
+                    pass
+                try:
+                    if ev.get("x") is not None and ev.get("y") is not None:
+                        await pg.mouse.move(float(ev["x"]) * self.viewport["width"],
+                                            float(ev["y"]) * self.viewport["height"])
+                    await pg.mouse.wheel(dx, dy)                                        # scroll containers
+                except Exception:
+                    pass
             elif t == "type":
                 await pg.keyboard.type(str(ev.get("text", "")))
             elif t == "key":
@@ -340,16 +348,29 @@ REPORT_FORMS = {
                      "url": "https://safebrowsing.google.com/safebrowsing/report_phish/?url={q}"},
     "microsoft": {"name": "Microsoft SmartScreen",
                   "url": "https://www.microsoft.com/en-us/wdsi/support/report-unsafe-site-guest"},
-    "netcraft": {"name": "Netcraft", "url": "https://report.netcraft.com/report?url={q}"},
 }
 
-_PREFILL_URL_JS = """(u) => {
+_PREFILL_JS = """(cfg) => {
   let n = 0;
+  const fire = (e, v) => { e.focus(); e.value = v; e.dispatchEvent(new Event('input',{bubbles:true})); e.dispatchEvent(new Event('change',{bubbles:true})); n++; };
   for (const e of document.querySelectorAll('input, textarea')) {
     const t = (e.type || '').toLowerCase();
+    if (e.disabled || e.readOnly || ['hidden','submit','button','checkbox','radio','file'].includes(t)) continue;
     const s = ((e.name||'')+' '+(e.id||'')+' '+(e.placeholder||'')+' '+(e.getAttribute('aria-label')||'')).toLowerCase();
     if ((t === 'url' || t === 'text' || t === '') && /url|website|link|address|\\bsite\\b|domain/.test(s)) {
-      if (!e.value) { e.focus(); e.value = u; e.dispatchEvent(new Event('input',{bubbles:true})); e.dispatchEvent(new Event('change',{bubbles:true})); n++; }
+      if (!e.value) fire(e, cfg.url);
+    } else if (e.tagName === 'TEXTAREA' || /detail|description|comment|message|additional|\\binfo\\b/.test(s)) {
+      if (!e.value) fire(e, cfg.detail);
+    }
+  }
+  for (const sel of document.querySelectorAll('select')) {   // native threat-type/category dropdowns
+    const s = ((sel.name||'')+' '+(sel.id||'')+' '+(sel.getAttribute('aria-label')||'')).toLowerCase();
+    if (/threat|type|category|reason|report/.test(s)) {
+      for (const o of sel.options) {
+        if (/phish|social eng|scam|unsafe|malic/i.test(o.text||'')) {
+          sel.value = o.value; sel.dispatchEvent(new Event('change',{bubbles:true})); n++; break;
+        }
+      }
     }
   }
   return n;
@@ -391,11 +412,11 @@ class ReportSession(Session):
                     self._log("(form slow to load — continuing)")
                 await page.wait_for_timeout(SETTLE_MS)
                 try:
-                    n = await page.evaluate(_PREFILL_URL_JS, self.url)
-                    self._log(f"Pre-filled the phishing URL into {n} field(s).")
+                    n = await page.evaluate(_PREFILL_JS, {"url": self.url, "detail": "Phishing website"})
+                    self._log(f"Pre-filled URL + details into {n} field(s).")
                 except Exception:
                     pass
-                self._log("Take over the frame: pick 'phishing' if asked, solve the CAPTCHA, click Submit — "
+                self._log("Take over the frame: threat type/category, solve the CAPTCHA, click Submit — "
                           "then press 'Resume automation' to close the report.")
                 self._pause()                  # hand to the analyst
                 await self._checkpoint()        # blocks until the analyst resumes

@@ -26,12 +26,6 @@ def takedown_targets(report: dict) -> list[dict]:
          "url": "https://safebrowsing.google.com/safebrowsing/report_phish/?url=" + q},
         {"key": "microsoft", "name": "Microsoft (SmartScreen)", "note": "report an unsafe site",
          "url": "https://www.microsoft.com/en-us/wdsi/support/report-unsafe-site-guest"},
-        {"key": "netcraft", "name": "Netcraft", "note": "report phishing",
-         "url": "https://report.netcraft.com/report?url=" + q},
-        {"key": "fortinet", "name": "Fortinet FortiGuard", "note": "submit URL for rating",
-         "url": "https://www.fortiguard.com/webfilter?q=" + q},
-        {"key": "apwg", "name": "APWG", "note": "e-mail the Anti-Phishing Working Group",
-         "url": f"mailto:reportphishing@apwg.org?subject=Phishing:%20{qh}&body={q}"},
     ]
     return targets
 
