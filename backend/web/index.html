@@ -631,15 +631,18 @@ async function toggleViews(rowEl, enc){
         <div class="vv-u">${esc(v.title||v.final_url||'')}</div>
       </div>`).join('')+`</div>`;
   }catch(e){ panel.innerHTML='<div class="empty-note" style="padding:14px">Could not capture views.</div>'; }
-  // network-level proof — ping + curl
-  const tw=document.createElement('div');
+  // network-level proof — ping + curl (with capture timestamp + re-run)
+  const tw=document.createElement('div'); tw.className='tracewrap'; panel.appendChild(tw);
+  renderTrace(tw, enc);
+}
+async function renderTrace(tw, enc){
   tw.innerHTML='<div class="kv" style="margin-top:16px"><span class="k">network trace (proof)</span></div><div class="empty-note">running ping + curl…</div>';
-  panel.appendChild(tw);
   try{
     const t=await (await fetch('/api/tracker/trace?url='+enc)).json();
-    tw.innerHTML='<div class="kv" style="margin-top:16px"><span class="k">network trace (proof)</span><span class="v">'+esc(t.host||'')+'</span></div>'
+    tw.innerHTML='<div class="kv" style="margin-top:16px"><span class="k">network trace (proof) · captured '+esc(t.captured||'')+'</span>'
+      +'<span class="v"><button class="cbtn" onclick="renderTrace(this.closest(\'.tracewrap\'),\''+enc+'\')">re-run</button></span></div>'
       +'<pre class="trace">$ ping '+esc(t.host||'')+'\n'+esc(t.ping||'')+'\n\n$ curl -sS -I '+esc(t.host||'')+'\n'+esc(t.curl||'')+'</pre>';
-  }catch(e){ tw.innerHTML=''; }
+  }catch(e){ tw.innerHTML='<div class="empty-note" style="margin-top:16px">Network trace failed.</div>'; }
 }
 function markPhishing(rep, v){
   const def=host(rep.url); const mb=$('#markbtn');

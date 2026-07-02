@@ -52,8 +52,9 @@ async def _snapshot(page) -> dict:
 
 def _cloak_verdict(sc: dict, vic: dict) -> str:
     if not sc.get("reached"):
-        return "scanner_blocked"          # bot view refused → suggestive of an IP/UA gate
-    if sc.get("url") and vic.get("url") and _host(sc["url"]) != _host(vic["url"]):
+        return "scanner_blocked"          # bot view refused/failed → NOT scored as cloaking
+    sh, vh = _host(sc.get("url") or ""), _host(vic.get("url") or "")
+    if sh and vh and sh != vh:
         return "cloaked_diff_host"
     if vic.get("title") and (sc.get("title") or "") != vic.get("title"):
         return "cloaked_diff_title"
@@ -74,7 +75,12 @@ async def scanner_view(browser, url: str) -> dict:
         except Exception:
             pass
         await spg.wait_for_timeout(700)
-        sc = {"reached": True, "url": spg.url, "status": (r.status if r else None), "title": await spg.title()}
+        cur = spg.url or ""
+        if not r or cur == "about:blank" or cur.startswith("about:"):
+            # the scanner never actually loaded (timeout/blocked) — NOT evidence of cloaking
+            sc = {"reached": False, "error": "scanner did not load (timeout/blocked)"}
+        else:
+            sc = {"reached": True, "url": cur, "status": (r.status if r else None), "title": await spg.title()}
         await sctx.close()
     except Exception as exc:
         sc["error"] = f"{type(exc).__name__}: {exc}"[:160]

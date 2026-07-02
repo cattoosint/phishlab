@@ -333,7 +333,8 @@ async def network_trace(url: str) -> dict:
         _run_cmd(ping_cmd, 15),
         _run_cmd(["curl", "-sS", "-I", "-m", "12", "--max-redirs", "3", "-A", UA, url], 15),
     )
-    return {"host": host, "ping": ping, "curl": curl}
+    return {"host": host, "ping": ping, "curl": curl,
+            "captured": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())}
 
 
 async def _loop() -> None:
