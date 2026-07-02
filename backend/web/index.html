@@ -312,7 +312,7 @@ function _startPoll(sid){
       ? (isRep?'You have control — pick “phishing” if asked, solve the CAPTCHA, click Submit, then Resume.':'You have control — click, scroll, and type on the frame to solve the challenge, then Resume automation.')
       : (isRep?'Opening the report form…':'Detonating live… — press Take over to drive the browser yourself.');
     if((s.state==='done'||s.state==='error')&&!done){
-      done=true; clearInterval(_poll); _sid=null; $('#live').className='live'; $('#go').disabled=false;
+      done=true; clearInterval(_poll); if(!isRep) window._doneSid=sid; _sid=null; $('#live').className='live'; $('#go').disabled=false;
       if(s.state==='error') setStatus((isRep?'Report failed: ':'Detonation failed: ')+(rep.error||''),true);
       else if(isRep) setStatus('Report submitted to '+(rep.target_name||'the service')+'.');
       else render(rep);
@@ -427,12 +427,12 @@ function render(rep){
   }
 
   // report & takedown (ready once the run finishes; live sessions only)
-  const rp=$('#report');
+  const rp=$('#report'); const rsid=_sid||window._doneSid;
   if(rp){
-    if(_sid && rep.verdict){
+    if(rsid && rep.verdict){
       window._curUrl=rep.url;
-      if(window._repSid!==_sid){ window._repSid=_sid;
-        fetch('/api/session/'+_sid+'/targets').then(r=>r.json()).then(d=>{
+      if(window._repSid!==rsid){ window._repSid=rsid;
+        fetch('/api/session/'+rsid+'/targets').then(r=>r.json()).then(d=>{
           const inapp=['safebrowsing','microsoft','netcraft'];
           rp.innerHTML=`<div class="kv"><span class="k">report the URL to</span></div>`+
             `<ul class="list">${(d.targets||[]).map(x=>{
