@@ -67,6 +67,7 @@
   .vv img{width:100%;display:block;cursor:zoom-in;background:#fff}
   .vv-none{padding:34px 10px;text-align:center;color:var(--muted);font-size:12px}
   .vv-u{padding:6px 10px;font-size:11px;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .trace{background:#0a0d11;border:1px solid var(--line);border-radius:8px;padding:12px 14px;font-family:var(--mono);font-size:11px;line-height:1.5;color:#cdd6de;white-space:pre-wrap;word-break:break-word;overflow:auto;max-height:300px;margin-top:8px}
   @media(max-width:640px){.app{flex-direction:column}.sidebar{width:auto;height:auto;position:static;flex-direction:row;align-items:center;gap:10px}.sb-tag,.sb-foot{display:none}}
 
   /* intake */
@@ -551,7 +552,8 @@ async function loadInbox(){
       `<div class="mail-row" onclick="openIntake('${it.sid||''}')">
         <div class="mu"><div class="u">${esc(it.url)}</div>
           <div style="color:var(--faint);font-size:11px;margin-top:2px">from ${esc(it.from||'?')} · ${ago(it.at)} · auto-detonated</div></div>
-        <div class="mv" id="inbox-v-${i}" style="color:var(--muted)">…</div></div>`).join('');
+        <div class="mv" id="inbox-v-${i}" style="color:var(--muted)">…</div>
+        <button class="cbtn" title="false positive — dismiss" onclick="event.stopPropagation();dismissMail('${encodeURIComponent(it.url)}')">✕ FP</button></div>`).join('');
     items.forEach(async (it,i)=>{ if(!it.sid) return;
       try{ const s=await (await fetch('/api/session/'+it.sid)).json(); const v=(s.report||{}).verdict;
         const el=document.getElementById('inbox-v-'+i); if(!el) return;
@@ -560,6 +562,10 @@ async function loadInbox(){
         else el.textContent=s.state; }catch(e){}
     });
   }catch(e){}
+}
+async function dismissMail(enc){
+  try{ await fetch('/api/mail/dismiss',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:decodeURIComponent(enc)})}); }catch(e){}
+  loadInbox();
 }
 async function openIntake(sid){
   if(!sid) return;
@@ -625,6 +631,15 @@ async function toggleViews(rowEl, enc){
         <div class="vv-u">${esc(v.title||v.final_url||'')}</div>
       </div>`).join('')+`</div>`;
   }catch(e){ panel.innerHTML='<div class="empty-note" style="padding:14px">Could not capture views.</div>'; }
+  // network-level proof — ping + curl
+  const tw=document.createElement('div');
+  tw.innerHTML='<div class="kv" style="margin-top:16px"><span class="k">network trace (proof)</span></div><div class="empty-note">running ping + curl…</div>';
+  panel.appendChild(tw);
+  try{
+    const t=await (await fetch('/api/tracker/trace?url='+enc)).json();
+    tw.innerHTML='<div class="kv" style="margin-top:16px"><span class="k">network trace (proof)</span><span class="v">'+esc(t.host||'')+'</span></div>'
+      +'<pre class="trace">$ ping '+esc(t.host||'')+'\n'+esc(t.ping||'')+'\n\n$ curl -sS -I '+esc(t.host||'')+'\n'+esc(t.curl||'')+'</pre>';
+  }catch(e){ tw.innerHTML=''; }
 }
 function markPhishing(rep, v){
   const def=host(rep.url); const mb=$('#markbtn');
@@ -636,8 +651,10 @@ function markPhishing(rep, v){
   const save=async ()=>{ if(done) return; done=true; const nn=(inp.value||'').trim()||def;
     try{ await fetch('/api/tracker',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({url:rep.url, name:nn, verdict:(v||{}).label, score:(v||{}).score})}); }catch(e){}
+    try{ await fetch('/api/mail/dismiss',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({url:rep.url})}); }catch(e){}   // it's a case now — drop it from the intake strip
     const saved=document.createElement('span'); saved.className='mark saved'; saved.style.marginTop='12px';
-    saved.textContent='✓ Saved as "'+nn+'" — tracking'; wrap.replaceWith(saved); loadTracker(); };
+    saved.textContent='✓ Saved as "'+nn+'" — tracking'; wrap.replaceWith(saved); loadTracker(); loadInbox(); };
   inp.onkeydown=(e)=>{ if(e.key==='Enter'){e.preventDefault();save();} };
   ok.onclick=save;
   wrap.appendChild(inp); wrap.appendChild(ok); mb.replaceWith(wrap); inp.focus(); inp.select();

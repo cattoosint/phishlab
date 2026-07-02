@@ -130,6 +130,13 @@ async def _loop(detonate_cb) -> None:
         await asyncio.sleep(INTERVAL)
 
 
+def dismiss(url: str) -> bool:
+    """Remove an item from the intake list — used when it's marked phishing (moved to a case) or a FP."""
+    before = len(QUEUE)
+    QUEUE[:] = [it for it in QUEUE if it.get("url") != url]
+    return len(QUEUE) < before
+
+
 def start(detonate_cb) -> None:
     global _task
     if _task is None and enabled():

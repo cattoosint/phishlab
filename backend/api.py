@@ -249,6 +249,22 @@ async def mail_queue():
     return {"enabled": M.enabled(), "interval": M.INTERVAL, "items": M.QUEUE[:40]}
 
 
+class MailReq(BaseModel):
+    url: str
+
+
+@app.post("/api/mail/dismiss")
+async def mail_dismiss(req: MailReq):
+    """Drop an intake item — it's been marked phishing (now a case) or a false positive."""
+    return {"ok": M.dismiss(req.url)}
+
+
+@app.get("/api/tracker/trace")
+async def tracker_trace(url: str):
+    """Network-level proof (ping + curl) for a tracked case."""
+    return await T.network_trace(_norm_url(url))
+
+
 @app.get("/api/tracker")
 async def tracker_list():
     return {"sites": await T.all_sites(), "interval": T.PING_INTERVAL}

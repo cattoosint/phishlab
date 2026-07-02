@@ -311,6 +311,31 @@ def multi_vantage_verdict(probes: list[dict]) -> dict:
             "titles": list(titles)[:4], "hosts": [h for h in hosts if h][:4]}
 
 
+async def _run_cmd(cmd: list[str], timeout: float = 15.0) -> str:
+    try:
+        p = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+        out, _ = await asyncio.wait_for(p.communicate(), timeout=timeout)
+        return (out or b"").decode("utf-8", "ignore").strip()[:4000] or "(no output)"
+    except asyncio.TimeoutError:
+        return "(timed out)"
+    except Exception as exc:
+        return f"({type(exc).__name__}: {exc})"[:200]
+
+
+async def network_trace(url: str) -> dict:
+    """Network-level proof for a case — ICMP ping + a raw curl HEAD. Down/blocked hosts show it here
+    (ping 'Request timed out' / 'could not find host'; curl connection error) as evidence."""
+    host = (urlsplit(url).hostname or url)
+    ping_cmd = (["ping", "-n", "3", "-w", "3000", host] if os.name == "nt"
+                else ["ping", "-c", "3", "-W", "3", host])
+    ping, curl = await asyncio.gather(
+        _run_cmd(ping_cmd, 15),
+        _run_cmd(["curl", "-sS", "-I", "-m", "12", "--max-redirs", "3", "-A", UA, url], 15),
+    )
+    return {"host": host, "ping": ping, "curl": curl}
+
+
 async def _loop() -> None:
     while True:
         try:
