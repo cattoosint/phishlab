@@ -31,7 +31,7 @@ BRANDS = (
 # likely did NOT reach the real content — report it honestly rather than call the page clean.
 CHALLENGE_MARKERS = {
     "cloudflare": ("just a moment", "checking your browser", "cf-browser-verification", "cf_chl",
-                   "challenge-platform", "attention required", "__cf_chl", "ray id"),
+                   "challenge-platform", "__cf_chl"),
     "turnstile": ("cf-turnstile", "challenges.cloudflare.com", "turnstile"),
     "recaptcha": ("g-recaptcha", "recaptcha/api.js", "grecaptcha"),
     "hcaptcha": ("h-captcha", "hcaptcha.com"),
@@ -45,6 +45,10 @@ def detect_challenge(title: str, html: str) -> list[str]:
     """Anti-bot gate(s) present in the page — Cloudflare/Turnstile/CAPTCHA/etc. Non-empty means the
     page is gated (detonation likely incomplete)."""
     blob = ((title or "") + " " + (html or "")).lower()
+    # a host/CDN ERROR page (Cloudflare 52x etc.) is NOT an interactive challenge — don't gate on it
+    if any(k in blob for k in ("error code 52", "connection timed out", "web server is down",
+                               "522:", "521:", "520:", "523:", "524:", "origin is unreachable")):
+        return []
     return [name for name, keys in CHALLENGE_MARKERS.items() if any(k in blob for k in keys)]
 
 
