@@ -314,9 +314,18 @@ function _startPoll(sid){
     $('#lstage').className='live-stage'+(hv?' hv':'');
     $('#takeover').style.display=(s.state==='running'&&!isRep)?'inline-flex':'none';
     $('#resume').style.display=hv?'inline-flex':'none';
-    $('#lhint').textContent = hv
-      ? (isRep?'You have control — pick “phishing” if asked, solve the CAPTCHA, click Submit, then Resume.':'You have control — click, scroll, and type on the frame to solve the challenge, then Resume automation.')
-      : (isRep?'Opening the report form…':'Detonating live… — press Take over to drive the browser yourself.');
+    if(isRep){
+      // headed report: the real window is on the desktop — no in-app frame
+      $('#limg').style.display='none'; $('#resume').textContent='✓ Done — I submitted';
+      $('#lhint').textContent = (s.state==='running')
+        ? 'Opening a browser window on your desktop…'
+        : 'A browser WINDOW opened on your desktop — solve the CAPTCHA + Submit there, then click Done.';
+    } else {
+      $('#limg').style.display=''; $('#resume').textContent='▶ Resume automation';
+      $('#lhint').textContent = hv
+        ? 'You have control — click, scroll, and type on the frame to solve the challenge, then Resume automation.'
+        : 'Detonating live… — press Take over to drive the browser yourself.';
+    }
     if((s.state==='done'||s.state==='error')&&!done){
       done=true; clearInterval(_poll); if(!isRep) window._doneSid=sid; _sid=null; $('#live').className='live'; $('#go').disabled=false;
       if(s.state==='error') setStatus((isRep?'Report failed: ':'Detonation failed: ')+(rep.error||''),true);
@@ -336,7 +345,8 @@ $('#limg').addEventListener('click',(e)=>{
 $('#limg').addEventListener('wheel',(e)=>{
   if(!_hv()) return; e.preventDefault();
   const r=e.target.getBoundingClientRect();
-  _send({type:'scroll',x:(e.clientX-r.left)/r.width,y:(e.clientY-r.top)/r.height,dx:e.deltaX,dy:e.deltaY});
+  const m = e.deltaMode===1 ? 40 : (e.deltaMode===2 ? r.height : 1);   // lines/pages -> pixels
+  _send({type:'scroll',x:(e.clientX-r.left)/r.width,y:(e.clientY-r.top)/r.height,dx:e.deltaX*m,dy:e.deltaY*m});
 },{passive:false});
 document.addEventListener('keydown',(e)=>{
   if(!_hv() || /^(INPUT|TEXTAREA)$/.test(e.target.tagName)) return;   // let GUI fields work

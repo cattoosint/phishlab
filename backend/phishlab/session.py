@@ -389,47 +389,48 @@ class ReportSession(Session):
                        "narration": [], "kind": "report"}
 
     async def run(self):
-        frames = None
         spec = REPORT_FORMS.get(self.target)
         try:
             if not spec:
                 raise ValueError(f"unknown report target {self.target}")
-            async with B.launch() as brw:
-                ctx = await B.new_victim_context(brw)
+            from playwright.async_api import async_playwright
+            async with async_playwright() as p:
+                browser = await p.firefox.launch(headless=False)     # a REAL window on the SOC desktop
+                browser.on("disconnected", lambda: self.resume())     # analyst closed the window = done
+                ctx = await browser.new_context(no_viewport=True, user_agent=B.FIREFOX_UA)
                 page = await ctx.new_page()
-                self._page = page
-                try:
-                    self.viewport = page.viewport_size or self.viewport
-                except Exception:
-                    pass
-                frames = asyncio.create_task(self._frame_loop())
                 self.state = "running"
                 form_url = spec["url"].replace("{q}", quote(self.url, safe=""))
-                self._log(f"Opening the {spec['name']} report form…")
+                self._log(f"Opened a browser WINDOW on your desktop for the {spec['name']} report form "
+                          f"(native — no lag, real scrolling).")
                 try:
                     await page.goto(form_url, wait_until="domcontentloaded", timeout=B.NAV_TIMEOUT)
                 except Exception:
                     self._log("(form slow to load — continuing)")
-                await page.wait_for_timeout(SETTLE_MS)
+                await page.wait_for_timeout(2500)                     # let the Angular form render first
                 try:
                     n = await page.evaluate(_PREFILL_JS, {"url": self.url, "detail": "Phishing website"})
-                    self._log(f"Pre-filled URL + details into {n} field(s).")
+                    self._log(f"Pre-filled {n} field(s) (URL + details). Adjust the threat type/category if needed.")
                 except Exception:
                     pass
-                self._log("Take over the frame: threat type/category, solve the CAPTCHA, click Submit — "
-                          "then press 'Resume automation' to close the report.")
-                self._pause()                  # hand to the analyst
-                await self._checkpoint()        # blocks until the analyst resumes
-                self._log(f"{spec['name']}: marked submitted by analyst.")
-                await ctx.close()
+                try:
+                    await page.bring_to_front()
+                except Exception:
+                    pass
+                self._log("In the WINDOW: solve the CAPTCHA + click Submit, then click 'Done — I submitted' here.")
+                self._pause()                    # hand to the analyst (they finish in the real window)
+                await self._checkpoint()          # blocks until Done (resume) or the window is closed
+                self._log(f"{spec['name']}: marked submitted. Closing the window.")
+                try:
+                    await browser.close()
+                except Exception:
+                    pass
             self.state = "done"
         except Exception as exc:
             self.report["error"] = f"{type(exc).__name__}: {exc}"[:200]
             self.state = "error"
         finally:
             self._page = None
-            if frames:
-                frames.cancel()
 
 
 def create_report(url: str, target: str) -> "ReportSession":

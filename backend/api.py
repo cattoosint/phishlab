@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
@@ -77,6 +78,8 @@ async def api_detonate(req: DetonateReq):
         return JSONResponse({"error": "Enter a URL to detonate."}, status_code=400)
     if not url.lower().startswith(("http://", "https://")):
         url = "http://" + url
+    if _is_own_console(url):
+        return JSONResponse({"error": _OWN_CONSOLE_MSG}, status_code=400)
     try:
         return await detonate(url)
     except Exception as exc:  # detonation of a live/hostile page can fail many ways — report it
@@ -90,12 +93,28 @@ def _norm_url(u: str) -> str:
     return u if u.lower().startswith(("http://", "https://")) else "http://" + u
 
 
+def _is_own_console(url: str) -> bool:
+    """The PhishLab console page itself (localhost root) — detonating it just scans our own demo data."""
+    try:
+        sp = urlsplit(url)
+        return (sp.hostname in ("127.0.0.1", "localhost", "::1")
+                and (sp.path or "/") in ("/", "/index.html"))
+    except Exception:
+        return False
+
+
+_OWN_CONSOLE_MSG = ("That's the PhishLab console itself — enter a suspect URL to analyse, "
+                    "or try the built-in test kit at /demo-phish/.")
+
+
 @app.post("/api/session")
 async def session_start(req: DetonateReq):
     """Start a LIVE detonation session; returns its id. Poll /state + /frame; POST /input + /resume."""
     url = _norm_url(req.url)
     if not url or url in ("http://", "https://"):
         return JSONResponse({"error": "Enter a URL to detonate."}, status_code=400)
+    if _is_own_console(url):
+        return JSONResponse({"error": _OWN_CONSOLE_MSG}, status_code=400)
     s = S.create(url)
     return {"id": s.id, "state": s.state}
 
