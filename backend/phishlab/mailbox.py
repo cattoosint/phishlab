@@ -67,25 +67,43 @@ def _decode(v) -> str:
         return str(v)
 
 
+_last_uid = 0    # watermark — only mail with a HIGHER UID than this (i.e. arrived after we started)
+
+
 def _poll_once() -> list[dict]:
-    """Sync IMAP fetch of unread link-only subjects (run in a thread). Marks them read."""
+    """Fetch only NEW mail (UID > watermark) whose subject is a link-only URL. Runs in a thread.
+
+    SAFETY: never touches the existing inbox — no mass mark-read. On the first poll it simply watermarks
+    at the current newest UID and processes nothing, so pre-existing mail is ignored entirely. Only mail
+    that arrives AFTER activation is considered; the UID watermark (not the \\Seen flag) prevents re-runs,
+    so the account's read/unread state is left alone."""
+    global _last_uid
     u, p = _cfg()
     out: list[dict] = []
     M = imaplib.IMAP4_SSL(HOST)
     try:
         M.login(u, p)
         M.select("INBOX")
-        typ, data = M.search(None, "UNSEEN")
-        for num in (data[0].split() if data and data[0] else []):
-            typ, md = M.fetch(num, "(RFC822)")
-            if not md or not md[0]:
+        if _last_uid == 0:                                     # first pass: watermark, ignore all history
+            typ, data = M.uid("search", None, "ALL")
+            uids = data[0].split() if data and data[0] else []
+            _last_uid = int(uids[-1]) if uids else 0
+            return []
+        typ, data = M.uid("search", None, f"{_last_uid + 1}:*")
+        for raw in (data[0].split() if data and data[0] else []):
+            uid = int(raw)
+            if uid <= _last_uid:                               # IMAP 'n:*' can echo the newest — skip it
                 continue
-            msg = email.message_from_bytes(md[0][1])
-            subj = _decode(msg.get("Subject"))
-            url = subject_url(subj)
-            if url:
-                out.append({"url": url, "from": _decode(msg.get("From")), "subject": subj})
-            M.store(num, "+FLAGS", "\\Seen")       # processed (link or not) — don't re-scan
+            _last_uid = max(_last_uid, uid)
+            # read ONLY the Subject/From headers (BODY.PEEK = don't mark read, HEADER.FIELDS = no body)
+            typ, md = M.uid("fetch", raw, "(BODY.PEEK[HEADER.FIELDS (SUBJECT FROM)])")
+            if not md or not md[0] or not isinstance(md[0], tuple):
+                continue
+            hdr = email.message_from_bytes(md[0][1])
+            url = subject_url(_decode(hdr.get("Subject")))
+            if not url:
+                continue                              # not the link format → never read/store the email
+            out.append({"url": url, "from": _decode(hdr.get("From")), "subject": _decode(hdr.get("Subject"))})
     finally:
         try:
             M.logout()
