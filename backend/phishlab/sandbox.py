@@ -238,6 +238,11 @@ def _verdict(r: dict) -> dict:
     if dc.startswith("cloaked"):
         score += 20
         reasons.append(f"content cloaking ({dc})")
+    if (r.get("cloaking") or {}).get("ip_geo"):
+        mv = (r.get("decloak") or {}).get("multi_vantage") or {}
+        score += 18
+        reasons.append("IP/geo cloaking — serves different content by vantage ("
+                       + ", ".join(mv.get("diffs", []) or ["differs"]) + ")")
     if any(s.get("off_site") for s in r["steps"]):
         score += 20
         reasons.append("credentials POST to an off-site host")

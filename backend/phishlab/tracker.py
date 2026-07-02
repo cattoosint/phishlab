@@ -8,13 +8,17 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import os
+import re
 import time
 from urllib.parse import urlsplit
 
 import httpx
 from playwright.async_api import async_playwright
+
+_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.I | re.S)
 
 DATA = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "tracker.json")
 PING_INTERVAL = int(os.getenv("PHISH_TRACK_INTERVAL") or "1800")   # 30 min
@@ -253,6 +257,58 @@ async def capture_views(url: str) -> list[dict]:
     vs = _vantages()
     async with async_playwright() as p:
         return list(await asyncio.gather(*[_capture_one(p, v, url) for v in vs]))
+
+
+def _content_sig(html: str) -> dict:
+    """A comparable fingerprint of the visible content — strips tags/scripts, hashes the text."""
+    txt = re.sub(r"\s+", " ", re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>|<[^>]+>", " ", html or "")).strip().lower()
+    return {"len": len(txt), "hash": hashlib.md5(txt[:4000].encode("utf-8", "ignore")).hexdigest()[:12]}
+
+
+async def vantage_probe(url: str) -> list[dict]:
+    """Fetch the URL from EVERY vantage (direct + Tor + Nord) and fingerprint the content — the
+    phase-1 IP/geo cloaking check: does the site serve different pages to different IPs?"""
+    vs = _vantages()
+
+    async def one(v):
+        try:
+            kw = {"timeout": 15, "follow_redirects": True, "verify": False, "headers": {"User-Agent": UA}}
+            if v["proxy"]:
+                kw["proxy"] = v["proxy"]
+            async with httpx.AsyncClient(**kw) as c:
+                r = await c.get(url)
+                body = r.text or ""
+                tm = _TITLE_RE.search(body)
+                title = re.sub(r"\s+", " ", tm.group(1)).strip()[:120] if tm else ""
+                return {"label": v["label"], "status": r.status_code, "final_url": str(r.url),
+                        "title": title, "sig": _content_sig(body),
+                        "reason": _down_reason(r.status_code, body[:8000])}
+        except Exception as exc:
+            return {"label": v["label"], "status": None, "title": "", "final_url": url,
+                    "sig": None, "reason": f"unreachable ({type(exc).__name__})"}
+
+    return list(await asyncio.gather(*[one(v) for v in vs]))
+
+
+def multi_vantage_verdict(probes: list[dict]) -> dict:
+    """Compare what each vantage was served. Different title / final host / much-different size across
+    the responding vantages = the site cloaks by IP or geo."""
+    ok = [p for p in probes if p.get("status") and p.get("sig")]
+    if len(ok) < 2:
+        return {"cloaked": False, "responded": len(ok), "note": "need >=2 responding vantages"}
+    titles = {(p.get("title") or "").strip().lower() for p in ok}
+    hosts = {(urlsplit(p.get("final_url") or "").hostname or "") for p in ok}
+    lens = [p["sig"]["len"] for p in ok]
+    spread = (max(lens) - min(lens)) / max(1, max(lens))
+    diffs = []
+    if len(titles) > 1:
+        diffs.append("different page titles")
+    if len(hosts) > 1:
+        diffs.append("different final hosts")
+    if spread > 0.45:
+        diffs.append(f"content size differs {int(spread * 100)}%")
+    return {"cloaked": bool(diffs), "diffs": diffs, "responded": len(ok),
+            "titles": list(titles)[:4], "hosts": [h for h in hosts if h][:4]}
 
 
 async def _loop() -> None:

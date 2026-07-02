@@ -17,6 +17,7 @@ from . import enrich as E
 from . import extract as X
 from . import indicators as I
 from . import kit as K
+from . import tracker as T
 from .sandbox import (MAX_STEPS, SETTLE_MS, _cloak_verdict, _fake_identity, _host, _merge_ip,
                       _snapshot, _verdict, scanner_view)
 
@@ -145,6 +146,21 @@ class Session:
                 self.report["decloak"] = dc
                 self.report["cloaking"] = {"detected": dc["cloaked"].startswith("cloaked"), "kind": dc["cloaked"]}
                 self._log(f"Decloak - scanner={dc['scanner'].get('url')} victim={dc['victim'].get('url')} verdict={dc['cloaked']}")
+
+                # phase-1 IP/geo cloaking: compare what direct / Tor / NordVPN are each served
+                self._log("Decloak (multi-vantage) - comparing direct / Tor / NordVPN views…")
+                try:
+                    probes = await T.vantage_probe(self.url)
+                    mv = T.multi_vantage_verdict(probes)
+                    dc["vantages"] = probes
+                    dc["multi_vantage"] = mv
+                    if mv.get("cloaked"):
+                        self.report["cloaking"]["ip_geo"] = True
+                        self._log(f"  IP/geo CLOAKING likely - {', '.join(mv.get('diffs', []))}")
+                    else:
+                        self._log(f"  consistent across {mv.get('responded', 0)} vantage(s) - no IP/geo cloaking")
+                except Exception:
+                    pass
 
                 all_html = []
                 fake = _fake_identity()

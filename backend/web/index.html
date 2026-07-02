@@ -442,12 +442,18 @@ function render(rep){
   ) : `<div class="empty-note">No enrichment.</div>`;
 
   // decloak
-  const dc=rep.decloak||{};
+  const dc=rep.decloak||{}; const mv=dc.multi_vantage||{}; const vps=dc.vantages||[];
+  let mvhtml='';
+  if(vps.length){
+    mvhtml = `<div class="kv"><span class="k">IP/geo cloaking</span><span class="v" style="${mv.cloaked?'color:var(--bad)':'color:var(--ok)'}">${mv.cloaked?('YES — '+esc((mv.diffs||[]).join(', '))):'no — consistent'}</span></div>`
+      + `<ul class="list">${vps.map(p=>{const up=p.status&&p.status<400&&!p.reason;return `<li class="tel-row"><b>${esc(p.label)}</b> ${p.status?('· '+p.status):''} ${up?'':'<span style="color:var(--warn)">'+esc(p.reason||'down')+'</span>'} ${p.title?'· '+esc(p.title.slice(0,42)):''}</li>`;}).join('')}</ul>`;
+  }
   $('#decloak').innerHTML=`
     <div class="kv"><span class="k">verdict</span><span class="v">${esc(dc.cloaked||'—')}</span></div>
     <div class="kv"><span class="k">scanner sees</span><span class="v">${esc((dc.scanner||{}).url||(dc.scanner||{}).error||'—')}</span></div>
     <div class="kv"><span class="k">victim sees</span><span class="v">${esc((dc.victim||{}).url||'—')}</span></div>
-    <div class="kv"><span class="k">redirect hops</span><span class="v">${((dc.redirect_chain||[]).length)||0}</span></div>`;
+    <div class="kv"><span class="k">redirect hops</span><span class="v">${((dc.redirect_chain||[]).length)||0}</span></div>`
+    + mvhtml;
 
   // network · routing
   const nw=rep.network||{};
