@@ -178,6 +178,21 @@ async def session_targets(sid: str):
     return {"targets": R.takedown_targets(s.report)}
 
 
+class ReportReq(BaseModel):
+    url: str
+    target: str
+
+
+@app.post("/api/report")
+async def report_start(req: ReportReq):
+    """Open a takedown report form in a live, take-over-able session (for CAPTCHA-gated submits)."""
+    url = _norm_url(req.url)
+    if req.target not in S.REPORT_FORMS:
+        return JSONResponse({"error": "unknown report target"}, status_code=400)
+    s = S.create_report(url, req.target)
+    return {"id": s.id, "state": s.state, "target": req.target}
+
+
 # ── takedown tracker (Phase 5b) ───────────────────────────────────────────────
 class TrackReq(BaseModel):
     url: str

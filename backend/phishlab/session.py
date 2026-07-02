@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from . import browser as B
 from . import enrich as E
@@ -329,6 +329,90 @@ class Session:
 
 def create(url: str) -> Session:
     s = Session(url)
+    SESSIONS[s.id] = s
+    s._task = asyncio.create_task(s.run())
+    return s
+
+
+# ── in-app takedown reporting (drive the report form, hand off for CAPTCHA) ──────
+REPORT_FORMS = {
+    "safebrowsing": {"name": "Google Safe Browsing",
+                     "url": "https://safebrowsing.google.com/safebrowsing/report_phish/?url={q}"},
+    "microsoft": {"name": "Microsoft SmartScreen",
+                  "url": "https://www.microsoft.com/en-us/wdsi/support/report-unsafe-site-guest"},
+    "netcraft": {"name": "Netcraft", "url": "https://report.netcraft.com/report?url={q}"},
+}
+
+_PREFILL_URL_JS = """(u) => {
+  let n = 0;
+  for (const e of document.querySelectorAll('input, textarea')) {
+    const t = (e.type || '').toLowerCase();
+    const s = ((e.name||'')+' '+(e.id||'')+' '+(e.placeholder||'')+' '+(e.getAttribute('aria-label')||'')).toLowerCase();
+    if ((t === 'url' || t === 'text' || t === '') && /url|website|link|address|\\bsite\\b|domain/.test(s)) {
+      if (!e.value) { e.focus(); e.value = u; e.dispatchEvent(new Event('input',{bubbles:true})); e.dispatchEvent(new Event('change',{bubbles:true})); n++; }
+    }
+  }
+  return n;
+}"""
+
+
+class ReportSession(Session):
+    """Drives a takedown report FORM in the live frame: opens it, pre-fills the phishing URL, then
+    hands to the analyst to pick 'phishing', solve the CAPTCHA, and submit (reuses takeover)."""
+
+    def __init__(self, url: str, target: str):
+        super().__init__(url)
+        self.target = target
+        spec = REPORT_FORMS.get(target) or {}
+        self.report = {"url": url, "target": target, "target_name": spec.get("name", target),
+                       "narration": [], "kind": "report"}
+
+    async def run(self):
+        frames = None
+        spec = REPORT_FORMS.get(self.target)
+        try:
+            if not spec:
+                raise ValueError(f"unknown report target {self.target}")
+            async with B.launch() as brw:
+                ctx = await B.new_victim_context(brw)
+                page = await ctx.new_page()
+                self._page = page
+                try:
+                    self.viewport = page.viewport_size or self.viewport
+                except Exception:
+                    pass
+                frames = asyncio.create_task(self._frame_loop())
+                self.state = "running"
+                form_url = spec["url"].replace("{q}", quote(self.url, safe=""))
+                self._log(f"Opening the {spec['name']} report form…")
+                try:
+                    await page.goto(form_url, wait_until="domcontentloaded", timeout=B.NAV_TIMEOUT)
+                except Exception:
+                    self._log("(form slow to load — continuing)")
+                await page.wait_for_timeout(SETTLE_MS)
+                try:
+                    n = await page.evaluate(_PREFILL_URL_JS, self.url)
+                    self._log(f"Pre-filled the phishing URL into {n} field(s).")
+                except Exception:
+                    pass
+                self._log("Take over the frame: pick 'phishing' if asked, solve the CAPTCHA, click Submit — "
+                          "then press 'Resume automation' to close the report.")
+                self._pause()                  # hand to the analyst
+                await self._checkpoint()        # blocks until the analyst resumes
+                self._log(f"{spec['name']}: marked submitted by analyst.")
+                await ctx.close()
+            self.state = "done"
+        except Exception as exc:
+            self.report["error"] = f"{type(exc).__name__}: {exc}"[:200]
+            self.state = "error"
+        finally:
+            self._page = None
+            if frames:
+                frames.cancel()
+
+
+def create_report(url: str, target: str) -> "ReportSession":
+    s = ReportSession(url, target)
     SESSIONS[s.id] = s
     s._task = asyncio.create_task(s.run())
     return s

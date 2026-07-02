@@ -19,26 +19,20 @@ def _e(s) -> str:
 def takedown_targets(report: dict) -> list[dict]:
     url = report.get("url", "")
     host = urlsplit(url).hostname or ""
-    enr = report.get("enrichment") or {}
-    ipinfo = enr.get("ip") or {}
-    asn = ipinfo.get("org") or ipinfo.get("isp") or ""
     q = quote(url, safe="")
     qh = quote(host, safe="")
     targets = [
-        {"name": "Google Safe Browsing", "note": "report phishing (URL prefilled)",
+        {"key": "safebrowsing", "name": "Google Safe Browsing", "note": "report phishing",
          "url": "https://safebrowsing.google.com/safebrowsing/report_phish/?url=" + q},
-        {"name": "Microsoft (SmartScreen)", "note": "report an unsafe site",
+        {"key": "microsoft", "name": "Microsoft (SmartScreen)", "note": "report an unsafe site",
          "url": "https://www.microsoft.com/en-us/wdsi/support/report-unsafe-site-guest"},
-        {"name": "Fortinet FortiGuard", "note": "submit URL for rating/reclassification",
-         "url": "https://www.fortiguard.com/webfilter?q=" + q},
-        {"name": "Netcraft", "note": "report phishing (URL prefilled)",
+        {"key": "netcraft", "name": "Netcraft", "note": "report phishing",
          "url": "https://report.netcraft.com/report?url=" + q},
-        {"name": "APWG", "note": "e-mail the Anti-Phishing Working Group",
+        {"key": "fortinet", "name": "Fortinet FortiGuard", "note": "submit URL for rating",
+         "url": "https://www.fortiguard.com/webfilter?q=" + q},
+        {"key": "apwg", "name": "APWG", "note": "e-mail the Anti-Phishing Working Group",
          "url": f"mailto:reportphishing@apwg.org?subject=Phishing:%20{qh}&body={q}"},
     ]
-    if asn:
-        targets.append({"name": f"Hosting abuse ({asn[:40]})",
-                        "note": "contact the host to pull the site", "url": "https://www.abuseipdb.com/check/" + quote(ipinfo.get("ip") or host)})
     return targets
 
 

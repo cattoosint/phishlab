@@ -303,15 +303,19 @@ function _startPoll(sid){
     if(s.has_frame) $('#limg').src='/api/session/'+sid+'/frame?t='+Date.now();   // only load a real frame
     const rep=s.report||{};
     const lc=$('#lconsole'); lc.innerHTML=conLines(rep.narration); lc.scrollTop=lc.scrollHeight;
-    const hv=(s.state==='handover');
+    const hv=(s.state==='handover'); const isRep=rep.kind==='report';
     $('#ls').textContent=hv?'you have control':s.state; $('#ls').className='ls'+(hv?' hv':'');
     $('#lstage').className='live-stage'+(hv?' hv':'');
-    $('#takeover').style.display=(s.state==='running')?'inline-flex':'none';
+    $('#takeover').style.display=(s.state==='running'&&!isRep)?'inline-flex':'none';
     $('#resume').style.display=hv?'inline-flex':'none';
-    $('#lhint').textContent=hv?'You have control — click, scroll, and type on the frame to solve the challenge, then Resume automation.':'Detonating live… — press Take over to drive the browser yourself.';
+    $('#lhint').textContent = hv
+      ? (isRep?'You have control — pick “phishing” if asked, solve the CAPTCHA, click Submit, then Resume.':'You have control — click, scroll, and type on the frame to solve the challenge, then Resume automation.')
+      : (isRep?'Opening the report form…':'Detonating live… — press Take over to drive the browser yourself.');
     if((s.state==='done'||s.state==='error')&&!done){
       done=true; clearInterval(_poll); _sid=null; $('#live').className='live'; $('#go').disabled=false;
-      if(s.state==='error') setStatus('Detonation failed: '+(rep.error||''),true); else render(rep);
+      if(s.state==='error') setStatus((isRep?'Report failed: ':'Detonation failed: ')+(rep.error||''),true);
+      else if(isRep) setStatus('Report submitted to '+(rep.target_name||'the service')+'.');
+      else render(rep);
     }
   },500);
 }
@@ -426,11 +430,16 @@ function render(rep){
   const rp=$('#report');
   if(rp){
     if(_sid && rep.verdict){
+      window._curUrl=rep.url;
       if(window._repSid!==_sid){ window._repSid=_sid;
         fetch('/api/session/'+_sid+'/targets').then(r=>r.json()).then(d=>{
+          const inapp=['safebrowsing','microsoft','netcraft'];
           rp.innerHTML=`<div class="kv"><span class="k">report the URL to</span></div>`+
-            `<ul class="list">${(d.targets||[]).map(x=>`<li><a href="${esc(x.url)}" target="_blank">${esc(x.name)}</a> <span style="color:var(--faint)"> — ${esc(x.note)}</span></li>`).join('')}</ul>`+
-            `<div class="empty-note" style="margin-top:8px">Opens a prefilled report form — you confirm + submit (these services require a CAPTCHA).</div>`;
+            `<ul class="list">${(d.targets||[]).map(x=>{
+              const b=inapp.includes(x.key)?` <button class="cbtn" onclick="startReport('${x.key}','${esc(x.name).replace(/'/g,'')}')">report in-app ▶</button>`:'';
+              return `<li><a href="${esc(x.url)}" target="_blank">${esc(x.name)}</a> <span style="color:var(--faint)"> — ${esc(x.note)}</span>${b}</li>`;
+            }).join('')}</ul>`+
+            `<div class="empty-note" style="margin-top:8px">“report in-app” opens the form in the frame + pre-fills the URL — solve the CAPTCHA there, submit, then Resume. Links open the site.</div>`;
         }).catch(()=>{});
       }
     } else { rp.innerHTML='<div class="empty-note">available when the run finishes</div>'; }
@@ -567,6 +576,23 @@ async function rmTrk(u,btn){ const c=btn&&btn.closest('.case'); if(c) c.remove()
   try{ await fetch('/api/tracker?url='+u,{method:'DELETE'}); }catch(e){} loadTracker(true); }
 $('#trk-refresh').addEventListener('click',()=>loadTracker(true));
 loadTracker(); setInterval(loadTracker, 60000);
+
+// ── in-app takedown reporting (opens the report form in the live frame, hand off for CAPTCHA) ──
+async function startReport(key,name){
+  const url=window._curUrl; if(!url) return;
+  try{
+    const r=await (await fetch('/api/report',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url,target:key})})).json();
+    if(r.id){
+      if(_poll){clearInterval(_poll);_poll=null;}
+      _sid=r.id; window._repSid=null;
+      $('#live').className='live on'; $('#lconsole').innerHTML=''; $('#limg').removeAttribute('src');
+      $('#lhint').textContent='Reporting to '+name+'…'; $('#ls').textContent='reporting'; $('#ls').className='ls';
+      $('#takeover').style.display='none'; $('#resume').style.display='none';
+      _startPoll(r.id);
+      document.getElementById('live').scrollIntoView({behavior:'smooth',block:'start'});
+    }
+  }catch(e){}
+}
 
 // health dot
 fetch('/api/health').then(r=>r.ok?null:Promise.reject()).catch(()=>{ $('#hdot').style.background='var(--bad)'; });
