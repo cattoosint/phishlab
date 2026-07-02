@@ -35,7 +35,8 @@ def _load_dotenv() -> None:
 
 _load_dotenv()
 
-from phishlab import session as S       # noqa: E402  (import after .env is loaded)
+from phishlab import report as R         # noqa: E402  (import after .env is loaded)
+from phishlab import session as S        # noqa: E402
 from phishlab import tracker as T        # noqa: E402
 from phishlab.kit import ART_DIR         # noqa: E402
 from phishlab.sandbox import detonate    # noqa: E402
@@ -149,6 +150,32 @@ async def session_resume(sid: str):
         return JSONResponse({"error": "no such session"}, status_code=404)
     s.resume()
     return {"ok": True, "state": s.state}
+
+
+@app.get("/api/session/{sid}/report.html")
+async def session_report_html(sid: str):
+    s = S.get(sid)
+    if not s:
+        return JSONResponse({"error": "no such session"}, status_code=404)
+    host = (s.report.get("url") or "site").split("//")[-1].split("/")[0]
+    return HTMLResponse(R.build_html(s.report),
+                        headers={"Content-Disposition": f'attachment; filename="phishlab-{host}.html"'})
+
+
+@app.get("/api/session/{sid}/report.md")
+async def session_report_md(sid: str):
+    s = S.get(sid)
+    if not s:
+        return JSONResponse({"error": "no such session"}, status_code=404)
+    return Response(R.build_markdown(s.report), media_type="text/markdown")
+
+
+@app.get("/api/session/{sid}/targets")
+async def session_targets(sid: str):
+    s = S.get(sid)
+    if not s:
+        return JSONResponse({"error": "no such session"}, status_code=404)
+    return {"targets": R.takedown_targets(s.report)}
 
 
 # ── takedown tracker (Phase 5b) ───────────────────────────────────────────────

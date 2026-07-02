@@ -128,6 +128,8 @@
   .card.c-amber{border-left:3px solid #d99a3a}  .card.c-amber>h2{color:#e8b45c}
   .card.c-green{border-left:3px solid #3fb27f}  .card.c-green>h2{color:#5fc795}
   .card.c-rose{border-left:3px solid #d072b0}   .card.c-rose>h2{color:#e08ec5}
+  .card.c-key{border-left:3px solid #6c7bd6}    .card.c-key>h2{color:#8b98e6}
+  .rpt-btn{display:inline-block;text-decoration:none;background:var(--accent);color:#fff;font-weight:600;font-size:13px;padding:9px 16px;border-radius:7px}
 
   /* timeline / evidence strip */
   .step{display:grid;grid-template-columns:230px 1fr;gap:18px;padding:16px 0;border-bottom:1px solid var(--line)}
@@ -242,6 +244,7 @@
         </div>
       </div>
       <div>
+        <div class="card c-key"><h2>Report &amp; takedown</h2><div class="body" id="report"></div></div>
         <div class="card c-rose"><h2>Code analysis</h2><div class="body" id="indicators"></div></div>
         <div class="card c-amber"><h2>Enrichment</h2><div class="body" id="enrich"></div></div>
         <div class="card c-red"><h2>Exfil</h2><div class="body" id="exfil"></div></div>
@@ -417,6 +420,20 @@ function render(rep){
     if((kt.authors||[]).length) kh+=`<div class="kv"><span class="k">actor</span><span class="v">${esc(kt.authors.join(', '))}</span></div>`;
     if(kt.saved_to) kh+=`<div class="kv"><span class="k">files saved to</span><span class="v" style="color:#5fc795">${esc(kt.saved_to)}</span></div>`;
     $('#kit').innerHTML=kh||'<div class="empty-note">—</div>';
+  }
+
+  // report & takedown (ready once the run finishes; live sessions only)
+  const rp=$('#report');
+  if(rp){
+    if(_sid && rep.verdict){
+      const dl=`<a class="rpt-btn" href="/api/session/${_sid}/report.html" target="_blank">⤓ Download SOC report</a>`;
+      if(window._repSid!==_sid){ window._repSid=_sid;
+        fetch('/api/session/'+_sid+'/targets').then(r=>r.json()).then(d=>{
+          rp.innerHTML=dl+`<div class="kv" style="margin-top:12px"><span class="k">report / takedown</span></div>`+
+            `<ul class="list">${(d.targets||[]).map(x=>`<li><a href="${esc(x.url)}" target="_blank">${esc(x.name)}</a> <span style="color:var(--faint)"> — ${esc(x.note)}</span></li>`).join('')}</ul>`;
+        }).catch(()=>{rp.innerHTML=dl;});
+      }
+    } else { rp.innerHTML='<div class="empty-note">available when the run finishes</div>'; }
   }
 
   // code analysis — read from the full page source ("is it fake")
