@@ -376,8 +376,9 @@ function render(rep){
   $('#vscore').textContent=v.score;
   $('#vlabel').textContent=(v.label||'').replace(/_/g,' ').toUpperCase();
   $('#vwhy').textContent=(v.reasons||[]).join(' · ')||'no strong signals';
-  const mb=$('#markbtn'); mb.className='mark'; mb.style.display='inline-block'; mb.onclick=()=>markPhishing(rep,v);
-  mb.textContent=(v.score||0)>=20?'＋ Mark as phishing → open case':'＋ Mark as phishing anyway → open case';
+  const mb=$('#markbtn');
+  if(mb){ mb.className='mark'; mb.style.display='inline-block'; mb.onclick=()=>markPhishing(rep,v);
+    mb.textContent=(v.score||0)>=20?'＋ Mark as phishing → open case':'＋ Mark as phishing anyway → open case'; }
   $('#vmeta').innerHTML=`${esc(host(rep.url))}<br>${(rep.steps||[]).length} steps · ${rep.elapsed??'?'}s`;
 
   // signals — clear cloaking yes/no + anti-bot gate + handover
@@ -625,12 +626,21 @@ async function toggleViews(rowEl, enc){
       </div>`).join('')+`</div>`;
   }catch(e){ panel.innerHTML='<div class="empty-note" style="padding:14px">Could not capture views.</div>'; }
 }
-async function markPhishing(rep, v){
-  const def=host(rep.url);   // saved with the host as the name; rename inline in Cases & tracker
-  await fetch('/api/tracker',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({url:rep.url, name:def, verdict:(v||{}).label, score:(v||{}).score})}).catch(()=>{});
-  const mb=$('#markbtn'); mb.className='mark saved'; mb.textContent='✓ Saved as case — rename it in “Cases & tracker”'; mb.onclick=null;
-  loadTracker();
+function markPhishing(rep, v){
+  const def=host(rep.url); const mb=$('#markbtn');
+  // inline name field right here in Analyze — type a case name / SOC#, Enter to save
+  const wrap=document.createElement('div'); wrap.style.cssText='display:flex;gap:7px;align-items:center;margin-top:12px;flex-wrap:wrap';
+  const inp=document.createElement('input'); inp.className='name-edit'; inp.value=def; inp.placeholder='case name / SOC#…';
+  const ok=document.createElement('button'); ok.className='mark'; ok.style.margin='0'; ok.textContent='Save case';
+  let done=false;
+  const save=async ()=>{ if(done) return; done=true; const nn=(inp.value||'').trim()||def;
+    try{ await fetch('/api/tracker',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({url:rep.url, name:nn, verdict:(v||{}).label, score:(v||{}).score})}); }catch(e){}
+    const saved=document.createElement('span'); saved.className='mark saved'; saved.style.marginTop='12px';
+    saved.textContent='✓ Saved as "'+nn+'" — tracking'; wrap.replaceWith(saved); loadTracker(); };
+  inp.onkeydown=(e)=>{ if(e.key==='Enter'){e.preventDefault();save();} };
+  ok.onclick=save;
+  wrap.appendChild(inp); wrap.appendChild(ok); mb.replaceWith(wrap); inp.focus(); inp.select();
 }
 // inline rename — no browser popup: the name becomes an editable field in place
 function renameCase(btn, encUrl, encCur){
