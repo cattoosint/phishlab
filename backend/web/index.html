@@ -191,6 +191,7 @@
     <div class="sb-tag">detonation sandbox</div>
     <button class="navi on" data-v="analyze" onclick="switchView('analyze')">Analyze</button>
     <button class="navi" data-v="tracker" onclick="switchView('tracker')">Cases &amp; tracker</button>
+    <button class="navi" data-v="inbox" onclick="switchView('inbox')">Inbox</button>
     <div class="sb-cases" id="sb-cases"></div>
     <div class="sb-foot"><span class="dot" id="hdot" title="engine"></span> run on the isolated host</div>
   </aside>
@@ -263,6 +264,14 @@
       <button class="go" id="trk-refresh" style="padding:6px 14px">Refresh</button>
     </div>
     <div id="trk-list"><div class="empty-note" style="padding:20px 0">No sites tracked yet — detonate a phishing URL and it's added automatically.</div></div>
+  </div>
+
+  <div id="view-inbox" style="display:none">
+    <div class="tracker-head">
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted)">Email intake · <span id="inbox-note"></span></div>
+      <button class="go" id="inbox-refresh" style="padding:6px 14px">Refresh</button>
+    </div>
+    <div id="inbox-list"></div>
   </div>
 </div></main></div>
 
@@ -526,8 +535,30 @@ function switchView(v){
   document.querySelectorAll('.navi').forEach(t=>t.className='navi'+(t.dataset.v===v?' on':''));
   $('#view-analyze').style.display=v==='analyze'?'block':'none';
   $('#view-tracker').style.display=v==='tracker'?'block':'none';
+  $('#view-inbox').style.display=v==='inbox'?'block':'none';
   if(v==='tracker') loadTracker(true);   // force a fresh, fully-collapsed list of ALL cases
+  if(v==='inbox') loadInbox();
 }
+async function loadInbox(){
+  try{
+    const d=await (await fetch('/api/mail/queue')).json();
+    const items=d.items||[];
+    $('#inbox-note').textContent = d.enabled
+      ? `${items.length} received · polling every ${d.interval||60}s`
+      : 'inactive — add GMAIL_USER + GMAIL_APP_PASSWORD to backend/.env';
+    $('#inbox-list').innerHTML = items.length ? items.map((it,i)=>
+      `<div class="trk up"><div><div class="u">${esc(it.url)}</div>
+        <div style="color:var(--faint);font-size:11px;margin-top:3px">from ${esc(it.from||'?')} · ${ago(it.at)}</div></div>
+        <div class="st" id="inbox-v-${i}">…</div>
+        <div style="font-size:11px;color:var(--muted)">auto-detonated</div><div></div></div>`).join('')
+      : `<div class="empty-note" style="padding:20px 0">${d.enabled?'No emails yet — forward a phishing URL (in the subject line) to the mailbox.':'Email intake is off. Add the Gmail app-password to activate.'}</div>`;
+    items.forEach(async (it,i)=>{ if(!it.sid) return;
+      try{ const s=await (await fetch('/api/session/'+it.sid)).json(); const v=(s.report||{}).verdict;
+        const el=document.getElementById('inbox-v-'+i); if(el) el.textContent = v?((v.label||'').split('_')[0]):s.state; }catch(e){}
+    });
+  }catch(e){}
+}
+$('#inbox-refresh').addEventListener('click',loadInbox);
 async function loadTracker(force){ try{ const d=await (await fetch('/api/tracker')).json(); renderSidebarCases(d.sites||[]);
   if(!force && document.querySelector('.case.open')) return;   // don't clobber an open per-vantage view
   renderTracker(d); }catch(e){} }

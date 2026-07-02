@@ -36,7 +36,8 @@ def _load_dotenv() -> None:
 
 _load_dotenv()
 
-from phishlab import report as R         # noqa: E402  (import after .env is loaded)
+from phishlab import mailbox as M        # noqa: E402  (import after .env is loaded)
+from phishlab import report as R         # noqa: E402
 from phishlab import session as S        # noqa: E402
 from phishlab import tracker as T        # noqa: E402
 from phishlab.kit import ART_DIR         # noqa: E402
@@ -228,6 +229,12 @@ class RenameReq(BaseModel):
 @app.on_event("startup")
 async def _startup():
     T.start()
+    M.start(lambda url: S.create(url).id)   # Gmail intake -> auto-detonate (dormant w/o creds)
+
+
+@app.get("/api/mail/queue")
+async def mail_queue():
+    return {"enabled": M.enabled(), "interval": M.INTERVAL, "items": M.QUEUE[:40]}
 
 
 @app.get("/api/tracker")
