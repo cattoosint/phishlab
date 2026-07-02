@@ -147,6 +147,13 @@ class Session:
                 self.report["decloak"] = dc
                 self.report["cloaking"] = {"detected": dc["cloaked"].startswith("cloaked"), "kind": dc["cloaked"]}
                 self._log(f"Decloak - scanner={dc['scanner'].get('url')} victim={dc['victim'].get('url')} verdict={dc['cloaked']}")
+                # host/CDN error page (Cloudflare 52x etc.) = the site is DOWN, not a live phish
+                _vs = vic.get("status")
+                if (_vs and (520 <= _vs <= 527 or _vs in (502, 503, 504))) or any(
+                        k in (vtitle or "").lower() for k in ("connection timed out", "error code 52",
+                                                              "522:", "web server is down")):
+                    self.report["site_down"] = True
+                    self._log(f"Site appears DOWN — host/CDN error ({_vs or 'error page'}). Nothing to detonate.")
 
                 # phase-1 IP/geo cloaking: compare what direct / Tor / NordVPN are each served
                 self._log("Decloak (multi-vantage) - comparing direct / Tor / NordVPN views…")

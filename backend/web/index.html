@@ -622,7 +622,7 @@ async function confirmCase(u){ await fetch('/api/tracker/confirm?url='+u,{method
 async function rmTrk(u,btn){ const c=btn&&btn.closest('.case'); if(c) c.remove();   // instant
   try{ await fetch('/api/tracker?url='+u,{method:'DELETE'}); }catch(e){} loadTracker(true); }
 $('#trk-refresh').addEventListener('click',()=>loadTracker(true));
-loadTracker(); setInterval(loadTracker, 60000);
+loadTracker();   // live refresh handled by _tick()
 
 // ── in-app takedown reporting (opens the report form in the live frame, hand off for CAPTCHA) ──
 async function startReport(key,name){
@@ -643,6 +643,20 @@ async function startReport(key,name){
 
 // health dot
 fetch('/api/health').then(r=>r.ok?null:Promise.reject()).catch(()=>{ $('#hdot').style.background='var(--bad)'; });
+
+// ── real-time loop (every 5s): auto-reload the page when the UI changes; live-refresh visible data ──
+let _ver=null;
+async function _tick(){
+  try{ const d=await (await fetch('/api/version')).json();
+    if(_ver && d.v && d.v!==_ver){ location.reload(); return; }   // UI updated -> reload itself, no hard-refresh
+    _ver=d.v;
+  }catch(e){}
+  try{
+    if($('#view-inbox').style.display==='block') loadInbox();       // new emails appear live
+    loadTracker();                                                  // takedown status + sidebar cases live
+  }catch(e){}
+}
+setInterval(_tick, 5000); _tick();
 
 // ?demo=1 renders a baked sample so the UI can be previewed with no backend
 if(new URLSearchParams(location.search).get('demo')){

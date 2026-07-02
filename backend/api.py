@@ -6,6 +6,7 @@ it only on the dedicated detonation host.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -61,6 +62,17 @@ async def index() -> HTMLResponse:
 @app.get("/api/health")
 async def health() -> dict:
     return {"ok": True, "service": "phishlab"}
+
+
+@app.get("/api/version")
+async def version() -> dict:
+    """A hash of the current GUI — the page polls this and auto-reloads itself when it changes,
+    so UI updates never need a manual hard-refresh."""
+    try:
+        v = hashlib.md5((WEB / "index.html").read_bytes()).hexdigest()[:12]
+    except Exception:
+        v = "0"
+    return {"v": v}
 
 
 @app.get("/api/artifact")

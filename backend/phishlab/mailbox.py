@@ -21,7 +21,7 @@ import time
 from email.header import decode_header
 
 HOST = "imap.gmail.com"
-INTERVAL = int(os.getenv("MAIL_POLL_INTERVAL") or "60")
+INTERVAL = int(os.getenv("MAIL_POLL_INTERVAL") or "30")
 QUEUE: list[dict] = []      # most-recent-first intake items, for the GUI Inbox
 _task: asyncio.Task | None = None
 
