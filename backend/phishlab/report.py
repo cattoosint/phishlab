@@ -35,8 +35,6 @@ def takedown_targets(report: dict) -> list[dict]:
          "url": "https://report.netcraft.com/report?url=" + q},
         {"name": "APWG", "note": "e-mail the Anti-Phishing Working Group",
          "url": f"mailto:reportphishing@apwg.org?subject=Phishing:%20{qh}&body={q}"},
-        {"name": "PhishTank", "note": "community blocklist (login required)",
-         "url": "https://www.phishtank.com/add_web_phish.php"},
     ]
     if asn:
         targets.append({"name": f"Hosting abuse ({asn[:40]})",

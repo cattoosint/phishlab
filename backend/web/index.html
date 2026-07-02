@@ -244,7 +244,7 @@
         </div>
       </div>
       <div>
-        <div class="card c-key"><h2>Report &amp; takedown</h2><div class="body" id="report"></div></div>
+        <div class="card c-key"><h2>Takedown</h2><div class="body" id="report"></div></div>
         <div class="card c-rose"><h2>Code analysis</h2><div class="body" id="indicators"></div></div>
         <div class="card c-amber"><h2>Enrichment</h2><div class="body" id="enrich"></div></div>
         <div class="card c-red"><h2>Exfil</h2><div class="body" id="exfil"></div></div>
@@ -426,12 +426,12 @@ function render(rep){
   const rp=$('#report');
   if(rp){
     if(_sid && rep.verdict){
-      const dl=`<a class="rpt-btn" href="/api/session/${_sid}/report.html" target="_blank">⤓ Download SOC report</a>`;
       if(window._repSid!==_sid){ window._repSid=_sid;
         fetch('/api/session/'+_sid+'/targets').then(r=>r.json()).then(d=>{
-          rp.innerHTML=dl+`<div class="kv" style="margin-top:12px"><span class="k">report / takedown</span></div>`+
-            `<ul class="list">${(d.targets||[]).map(x=>`<li><a href="${esc(x.url)}" target="_blank">${esc(x.name)}</a> <span style="color:var(--faint)"> — ${esc(x.note)}</span></li>`).join('')}</ul>`;
-        }).catch(()=>{rp.innerHTML=dl;});
+          rp.innerHTML=`<div class="kv"><span class="k">report the URL to</span></div>`+
+            `<ul class="list">${(d.targets||[]).map(x=>`<li><a href="${esc(x.url)}" target="_blank">${esc(x.name)}</a> <span style="color:var(--faint)"> — ${esc(x.note)}</span></li>`).join('')}</ul>`+
+            `<div class="empty-note" style="margin-top:8px">Opens a prefilled report form — you confirm + submit (these services require a CAPTCHA).</div>`;
+        }).catch(()=>{});
       }
     } else { rp.innerHTML='<div class="empty-note">available when the run finishes</div>'; }
   }
