@@ -20,6 +20,8 @@ if not exist ".venv\Scripts\python.exe" (
   python -m pip install --disable-pip-version-check --quiet --upgrade pip
   python -m pip install --disable-pip-version-check --quiet -r backend\requirements.txt || ( echo   [X] Dependency install failed. & pause & exit /b 1 )
   python -m playwright install firefox || ( echo   [X] Browser download failed. & pause & exit /b 1 )
+  echo   Fetching the Cloudflare-capable browser ^(Camoufox^)...
+  python -m camoufox fetch
 ) else (
   call ".venv\Scripts\activate.bat"
 )

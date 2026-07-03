@@ -1,8 +1,10 @@
 # PhishLab backend — detonation engine + (future) API
-playwright>=1.40,<2
+# Playwright PINNED to 1.51 — Camoufox 0.4.11 ships Firefox 135 whose juggler protocol matches the
+# 1.51 driver; newer drivers (1.55+) send a viewport.isMobile field it rejects. Keep them in lockstep.
+playwright==1.51.0
 fastapi>=0.110,<1
 uvicorn[standard]>=0.29,<1
 httpx[socks]>=0.26,<1   # [socks] = Tor/SOCKS proxy support for the multi-vantage tracker
-# Optional stealth Firefox (better decloaking). Pinned compatible in the Docker image; set
-# PHISH_STEALTH=1 to use it. The engine falls back to vanilla Playwright Firefox if unavailable.
-# invisible_playwright @ git+https://github.com/feder-cr/invisible_playwright.git
+# Camoufox — real-fingerprint Firefox that passes Cloudflare/Turnstile. Set PHISH_BROWSER=camoufox to
+# use it (falls back to vanilla Firefox if the binary isn't fetched: python -m camoufox fetch).
+camoufox==0.4.11
