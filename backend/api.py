@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import os
+import re
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -112,11 +113,9 @@ async def artifact(path: str):
 
 @app.post("/api/detonate")
 async def api_detonate(req: DetonateReq):
-    url = (req.url or "").strip()
-    if not url:
+    if not (req.url or "").strip():
         return JSONResponse({"error": "Enter a URL to detonate."}, status_code=400)
-    if not url.lower().startswith(("http://", "https://")):
-        url = "http://" + url
+    url = _norm_url(req.url)     # refangs hxxps://evil[.]com -> https://evil.com
     err = _guard(url)
     if err:
         return JSONResponse({"error": err}, status_code=400)
@@ -128,8 +127,21 @@ async def api_detonate(req: DetonateReq):
 
 
 # ── live interactive session (Phase 4b) ───────────────────────────────────────
+_DEFANG = [(r"h[x*]{2}ps", "https"), (r"h[x*]{2}p", "http"), (r"\[\.\]", "."), (r"\(\.\)", "."),
+           (r"\{\.\}", "."), (r"\[dot\]", "."), (r"\(dot\)", "."), (r"\[:\]", ":"), (r"\[/\]", "/")]
+
+
+def _refang(u: str) -> str:
+    """Turn a threat-intel-defanged URL (hxxps://evil[.]com) back into a real one so it can be pasted
+    straight from a report/urlscan into the console."""
+    u = (u or "").strip().strip("<>").strip()
+    for pat, rep in _DEFANG:
+        u = re.sub(pat, rep, u, flags=re.I)
+    return u
+
+
 def _norm_url(u: str) -> str:
-    u = (u or "").strip()
+    u = _refang(u)
     return u if u.lower().startswith(("http://", "https://")) else "http://" + u
 
 
