@@ -46,6 +46,8 @@
   .main{flex:1;min-width:0}
   .mark{margin-top:12px;background:var(--bad);border:0;border-radius:7px;color:#fff;font-family:var(--ui);font-size:13px;font-weight:600;padding:8px 16px;cursor:pointer}
   .mark.saved{background:var(--panel2);color:var(--ok);cursor:default}
+  .mark.fp{background:var(--panel2);color:var(--muted);border:1px solid var(--line)}
+  .mark.fp:hover{color:var(--text);border-color:var(--ok)}
   .sb-cases{margin-top:16px;display:flex;flex-direction:column;gap:1px;overflow-y:auto;min-height:0}
   .sc-h{font-size:10px;text-transform:uppercase;letter-spacing:.09em;color:var(--faint);padding:0 12px 7px}
   .sc{display:flex;align-items:center;gap:8px;padding:7px 12px;border-radius:6px;cursor:pointer;font-size:12.5px;color:var(--muted)}
@@ -237,7 +239,8 @@
     <div class="verdict" id="verdict">
       <div class="score" id="vscore">—</div>
       <div><div class="lab" id="vlabel">—</div><div class="why" id="vwhy"></div>
-        <button class="mark" id="markbtn" style="display:none">＋ Mark as phishing → open case</button></div>
+        <div id="markzone" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:12px"><button class="mark" id="markbtn" style="margin:0;display:none">＋ Mark as phishing → open case</button>
+        <button class="mark fp" id="fpbtn" style="margin:0;display:none">✓ Not phishing (FP)</button><span id="marknote"></span></div></div>
       <div class="meta" id="vmeta"></div>
     </div>
 
@@ -377,9 +380,12 @@ function render(rep){
   $('#vscore').textContent=v.score;
   $('#vlabel').textContent=(v.label||'').replace(/_/g,' ').toUpperCase();
   $('#vwhy').textContent=(v.reasons||[]).join(' · ')||'no strong signals';
+  const mn=$('#marknote'); if(mn) mn.innerHTML='';   // clear any stale "saved as…" from a prior report
   const mb=$('#markbtn');
-  if(mb){ mb.className='mark'; mb.style.display='inline-block'; mb.onclick=()=>markPhishing(rep,v);
+  if(mb){ mb.className='mark'; mb.style.display='inline-block'; mb.style.margin='0'; mb.onclick=()=>markPhishing(rep,v);
     mb.textContent=(v.score||0)>=20?'＋ Mark as phishing → open case':'＋ Mark as phishing anyway → open case'; }
+  const fb=$('#fpbtn');
+  if(fb){ fb.className='mark fp'; fb.style.display='inline-block'; fb.style.margin='0'; fb.onclick=()=>markFP(rep); fb.textContent='✓ Not phishing (FP)'; }
   $('#vmeta').innerHTML=`${esc(host(rep.url))}<br>${(rep.steps||[]).length} steps · ${rep.elapsed??'?'}s`;
 
   // signals — clear cloaking yes/no + anti-bot gate + handover
@@ -482,8 +488,9 @@ function render(rep){
   ) : (rep.indicators ? '<div class="empty-note">No phishing indicators found in the source.</div>' : '<div class="empty-note">—</div>');
 
   // enrichment
-  const en=rep.enrichment||{}, rd=en.rdap||{}, ipx=en.ip||{}, uh=en.urlhaus||{}, ct=en.cert||{};
+  const en=rep.enrichment||{}, rd=en.rdap||{}, ipx=en.ip||{}, uh=en.urlhaus||{}, ct=en.cert||{}, fp=en.fingerprint||{};
   const young=(typeof rd.age_days==='number'&&rd.age_days<30);
+  const platform=[fp.server,fp.powered_by,fp.generator].filter(Boolean).join(' · ');
   $('#enrich').innerHTML = en.host ? (
     `<div class="kv"><span class="k">domain age</span><span class="v" style="${young?'color:var(--bad)':''}">${rd.age_days!=null?rd.age_days+' days'+(young?' ⚠':''):'—'}</span></div>`+
     `<div class="kv"><span class="k">registered</span><span class="v">${esc((rd.created||'').slice(0,10)||'—')}</span></div>`+
@@ -492,7 +499,9 @@ function render(rep){
     `<div class="kv"><span class="k">asn · geo</span><span class="v">${esc((ipx.asn||'—').split(',')[0])} · ${esc(ipx.country||'—')}</span></div>`+
     `<div class="kv"><span class="k">ip</span><span class="v">${esc(ipx.ip||'—')}</span></div>`+
     `<div class="kv"><span class="k">blocklist</span><span class="v" style="${uh.listed?'color:var(--bad)':''}">${uh.listed?('URLhaus LISTED'+(uh.threat?' ('+esc(uh.threat)+')':'')):(uh.listed===false?'not listed':'—')}</span></div>`+
-    `<div class="kv"><span class="k">newest cert</span><span class="v">${esc((ct.newest||'').slice(0,10)||'—')}</span></div>`
+    `<div class="kv"><span class="k">newest cert</span><span class="v">${esc((ct.newest||'').slice(0,10)||'—')}</span></div>`+
+    `<div class="kv"><span class="k">platform</span><span class="v">${esc(platform||'—')}</span></div>`+
+    `<div class="kv"><span class="k">tech stack</span><span class="v">${esc((fp.tech||[]).join(', ')||'—')}</span></div>`
   ) : `<div class="empty-note">No enrichment.</div>`;
 
   // decloak
@@ -645,9 +654,9 @@ async function renderTrace(tw, enc){
   }catch(e){ tw.innerHTML='<div class="empty-note" style="margin-top:16px">Network trace failed.</div>'; }
 }
 function markPhishing(rep, v){
-  const def=host(rep.url); const mb=$('#markbtn');
-  // inline name field right here in Analyze — type a case name / SOC#, Enter to save
-  const wrap=document.createElement('div'); wrap.style.cssText='display:flex;gap:7px;align-items:center;margin-top:12px;flex-wrap:wrap';
+  const def=host(rep.url), mb=$('#markbtn'), fb=$('#fpbtn'), mn=$('#marknote');
+  if(mb) mb.style.display='none'; if(fb) fb.style.display='none'; if(!mn) return; mn.innerHTML='';
+  const box=document.createElement('span'); box.style.cssText='display:inline-flex;gap:7px;align-items:center';
   const inp=document.createElement('input'); inp.className='name-edit'; inp.value=def; inp.placeholder='case name / SOC#…';
   const ok=document.createElement('button'); ok.className='mark'; ok.style.margin='0'; ok.textContent='Save case';
   let done=false;
@@ -656,11 +665,18 @@ function markPhishing(rep, v){
       body:JSON.stringify({url:rep.url, name:nn, verdict:(v||{}).label, score:(v||{}).score})}); }catch(e){}
     try{ await fetch('/api/mail/dismiss',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({url:rep.url})}); }catch(e){}   // it's a case now — drop it from the intake strip
-    const saved=document.createElement('span'); saved.className='mark saved'; saved.style.marginTop='12px';
-    saved.textContent='✓ Saved as "'+nn+'" — tracking'; wrap.replaceWith(saved); loadTracker(); loadInbox(); };
+    mn.innerHTML='<span class="mark saved" style="margin:0">✓ Saved as "'+esc(nn)+'" — tracking</span>'; loadTracker(); loadInbox(); };
   inp.onkeydown=(e)=>{ if(e.key==='Enter'){e.preventDefault();save();} };
   ok.onclick=save;
-  wrap.appendChild(inp); wrap.appendChild(ok); mb.replaceWith(wrap); inp.focus(); inp.select();
+  box.appendChild(inp); box.appendChild(ok); mn.appendChild(box); inp.focus(); inp.select();
+}
+async function markFP(rep){
+  const mb=$('#markbtn'), fb=$('#fpbtn'), mn=$('#marknote');
+  try{ await fetch('/api/tracker?url='+encodeURIComponent(rep.url),{method:'DELETE'}); }catch(e){}      // remove if tracked
+  try{ await fetch('/api/mail/dismiss',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:rep.url})}); }catch(e){}
+  if(mb) mb.style.display='none'; if(fb) fb.style.display='none';
+  if(mn) mn.innerHTML='<span class="mark saved" style="margin:0">✓ Marked false positive — removed from tracking</span>';
+  loadTracker(); loadInbox();
 }
 // inline rename — no browser popup: the name becomes an editable field in place
 function renameCase(btn, encUrl, encCur){

@@ -8,6 +8,7 @@ NOT the phishing host itself.
 from __future__ import annotations
 
 import asyncio
+import re
 import socket
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
@@ -16,6 +17,7 @@ import httpx
 
 TIMEOUT = 8.0
 UA = "PhishLab/0.1 (SOC phishing analysis)"
+BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0"
 
 
 def _registrable(host: str) -> str:
@@ -108,18 +110,64 @@ async def crtsh_recent(host: str) -> dict | None:
     return {"certs": len(data), "newest": newest}
 
 
+_FP_TECH = [
+    ("WordPress", r"wp-content|wp-includes|/wp-json"),
+    ("Squarespace", r"squarespace|static1\.squarespace"),
+    ("Shopify", r"cdn\.shopify|x-shopify|Shopify\.theme"),
+    ("Wix", r"\bwix\.com|wixstatic|_wixCssStates"),
+    ("Webflow", r"webflow"),
+    ("Ghost", r'content=["\']Ghost'),
+    ("Drupal", r"Drupal|/sites/default/files"),
+    ("Joomla", r"Joomla|/media/jui/"),
+    ("Weebly", r"weebly"),
+    ("Google Sites", r"sites\.google\.com|gstatic.*sites"),
+    ("Blogger", r"blogspot|blogger\.com"),
+    ("Next.js", r"__NEXT_DATA__|/_next/static"),
+    ("React", r"\breact(-dom)?(\.min)?\.js"),
+    ("Vue.js", r"vue(\.min)?\.js|__vue__"),
+    ("Bootstrap", r"bootstrap(\.min)?\.(css|js)"),
+    ("jQuery", r"jquery(\.min)?\.js"),
+    ("PHP", r"\.php\b|x-powered-by:\s*php"),
+    ("Cloudflare", r"__cf_bm|cf-ray|cdnjs\.cloudflare"),
+    ("Google Analytics", r"googletagmanager|google-analytics|gtag\("),
+]
+_FP_HDRS = ("server", "x-powered-by", "x-generator", "via", "x-aspnet-version",
+            "x-shopify-stage", "x-drupal-cache")
+
+
+async def fingerprint(url: str) -> dict | None:
+    """WhatWeb-style tech/hosting fingerprint from the page's headers + HTML — identifies the platform
+    (Squarespace/Wix/Shopify/WordPress…) so you know who to report to + spot a phish riding a legit SaaS."""
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT, verify=False, follow_redirects=True,
+                                     headers={"User-Agent": BROWSER_UA}) as c:
+            r = await c.get(url)
+    except Exception:
+        return None
+    body = (r.text or "")[:80000]
+    blob = body + " " + " ".join(f"{k}:{v}" for k, v in r.headers.items())
+    gen = None
+    g = re.search(r'<meta[^>]+name=["\']generator["\'][^>]+content=["\']([^"\']+)', body, re.I)
+    if g:
+        gen = g.group(1)[:80]
+    tech = sorted({name for name, pat in _FP_TECH if re.search(pat, blob, re.I)})
+    return {"status": r.status_code, "server": r.headers.get("server"),
+            "powered_by": r.headers.get("x-powered-by"), "generator": gen, "tech": tech}
+
+
 async def enrich(url: str) -> dict:
     host = (urlsplit(url).hostname or "").lower()
     if not host:
         return {}
-    rdap, ipi, uh, crt = await asyncio.gather(
-        rdap_domain(host), ip_info(host), urlhaus_check(host), crtsh_recent(host),
+    rdap, ipi, uh, crt, fp = await asyncio.gather(
+        rdap_domain(host), ip_info(host), urlhaus_check(host), crtsh_recent(host), fingerprint(url),
         return_exceptions=True)
 
     def ok(x):
         return x if not isinstance(x, Exception) else None
 
-    return {"host": host, "rdap": ok(rdap), "ip": ok(ipi), "urlhaus": ok(uh), "cert": ok(crt)}
+    return {"host": host, "rdap": ok(rdap), "ip": ok(ipi), "urlhaus": ok(uh), "cert": ok(crt),
+            "fingerprint": ok(fp)}
 
 
 def score_signals(enr: dict) -> list[tuple[int, str]]:
