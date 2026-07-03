@@ -23,7 +23,7 @@ from . import extract as X
 from . import indicators as I
 from . import kit as K
 
-MAX_STEPS = 6
+MAX_STEPS = 10   # multi-step kits (gate -> login -> OTP) need headroom now that wait/advance are steps
 SETTLE_MS = 1800
 
 
@@ -147,6 +147,9 @@ async def detonate(url: str, *, max_steps: int = MAX_STEPS) -> dict:
             log(f"CLOAKING DETECTED - {dc['cloaked']} (bot is served a decoy; victim gets the real page)")
 
         all_html: list[str] = []
+        fake = _fake_identity()
+        acted: set[str] = set()
+        waited: set[str] = set()
         try:
             for step in range(max_steps):
                 snap = await _snapshot(page)
@@ -165,37 +168,66 @@ async def detonate(url: str, *, max_steps: int = MAX_STEPS) -> dict:
                         report["challenge"].append(c)
                 log(f"Step {step}: {snap['url']} - \"{snap['title']}\" - {len(forms)} form(s)"
                     + (f" - TELEGRAM exfil bot {tg[0]['bot_id']}" if tg else ""))
-                if ch:
-                    # a gate we (probably) can't pass headlessly → hand over to the analyst
+
+                if snap["url"] in acted and not any(f.get("has_password") for f in forms):
+                    log("Back on a handled page - no progress, stopping.")
+                    break
+
+                if ch:                                        # anti-bot gate → batch can't take over; flag + stop
                     report["handover_needed"] = True
-                    log(f"Step {step}: anti-bot gate ({', '.join(ch)}) - automation cannot pass this. "
-                        f"HAND OVER: the analyst solves it in the browser, then automation resumes.")
+                    log(f"Step {step}: anti-bot gate ({', '.join(ch)}) - automation cannot pass headlessly. "
+                        f"Re-run as a live session to take over and solve it.")
                     break
 
-                cred_form = next((f for f in forms if f.get("has_password")), None)
-                if not cred_form:
-                    log("No credential form here - stopping step-through.")
-                    break
+                # 'please wait / verifying' interstitial (no cred form): click advance / wait, then re-check
+                if (X.is_wait_page(snap.get("title"), snap.get("html"))
+                        and not any(f.get("has_password") for f in forms)
+                        and snap["url"] not in waited):
+                    waited.add(snap["url"])
+                    log(f"Step {step}: interstitial - waiting for it to advance…")
+                    _u = snap["url"]
+                    try:                                      # sit through a JS/meta redirect (kits stall bots)
+                        await page.wait_for_url(lambda u: u != _u, timeout=15000)
+                    except Exception:
+                        btn = await B.click_advance(page)     # didn't auto-advance -> click the continue control
+                        if btn:
+                            log(f"  clicked '{btn}'")
+                    await page.wait_for_timeout(SETTLE_MS)
+                    continue
 
-                user, pw = _fake_creds()
-                filled = await B.fill_credentials(page, user, pw)
-                fshot = await B.screenshot_b64(page)
-                dest = cred_form.get("action")
-                off = _host(dest) and _host(dest) != _host(snap["url"])
-                log(f"Step {step}: filled FAKE creds ({user}) - POSTs to {dest}"
-                    + ("  [!] OFF-SITE (creds leave to a third party)" if off else ""))
-                report["steps"].append({
-                    "i": step, "action": "fill+submit", "filled": filled,
-                    "creds_sent_to": dest, "off_site": bool(off), "screenshot": fshot,
-                })
-                await B.submit_form(page)
-                try:
-                    await page.wait_for_load_state("domcontentloaded", timeout=8000)
-                except Exception:
-                    pass
-                await page.wait_for_timeout(SETTLE_MS)
+                # fill ANY field the page asks for (email/password/OTP/text) with FAKE data, then advance
+                filled = await B.fill_fields(page, fake)
+                acted.add(snap["url"])
+                if filled:
+                    dest = next((f.get("action") for f in forms if f.get("action")), None) or snap["url"]
+                    off = bool(_host(dest) and _host(dest) != _host(snap["url"]))
+                    log(f"Step {step}: filled FAKE {', '.join(x['kind'] for x in filled)} -> {dest}"
+                        + ("  [!] OFF-SITE (creds leave to a third party)" if off else ""))
+                    report["steps"].append({
+                        "i": step, "action": "fill+submit", "filled": filled,
+                        "creds_sent_to": dest, "off_site": off, "screenshot": await B.screenshot_b64(page),
+                    })
+                    await B.click_advance(page)
+                    try:
+                        await page.wait_for_load_state("domcontentloaded", timeout=8000)
+                    except Exception:
+                        pass
+                    await page.wait_for_timeout(SETTLE_MS)
+                    continue
+
+                log("Nothing left to fill or click - stopping step-through.")
+                break
         finally:
             joined = "\n".join(all_html)
+            try:                                              # fold in bundled .js exfil config (same as live)
+                ext_js = await I.gather_scripts(url, joined)
+                if ext_js:
+                    joined += "\n/*--external-js--*/\n" + ext_js
+                    for t in X.telegram_channels(ext_js):
+                        if t not in report["exfil"]["telegram"]:
+                            report["exfil"]["telegram"].append(t)
+            except Exception:
+                pass
             report["iocs"] = X.iocs(joined, url, extra_urls=[a for a in report["exfil"]["form_actions"] if a])
             # brands from TITLES only (page markup legitimately mentions Google/Facebook for OAuth)
             report["iocs"]["brands_impersonated"] = X.brand_hits(*[s.get("title", "") for s in report["steps"]])
