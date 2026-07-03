@@ -56,8 +56,8 @@ def _cloak_verdict(sc: dict, vic: dict) -> str:
     sh, vh = _host(sc.get("url") or ""), _host(vic.get("url") or "")
     if sh and vh and sh != vh:
         return "cloaked_diff_host"
-    if vic.get("title") and (sc.get("title") or "") != vic.get("title"):
-        return "cloaked_diff_title"
+    if vic.get("title") and sc.get("title") and sc["title"] != vic["title"]:
+        return "cloaked_diff_title"          # both non-empty + differ (empty scanner title = unknown, not a diff)
     if sc.get("status") is not None and sc.get("status") != vic.get("status"):
         return "cloaked_diff_status"
     return "no_diff"
@@ -74,7 +74,7 @@ async def scanner_view(browser, url: str) -> dict:
             r = await spg.goto(url, wait_until="domcontentloaded", timeout=min(B.NAV_TIMEOUT, 15000))
         except Exception:
             pass
-        await spg.wait_for_timeout(700)
+        await spg.wait_for_timeout(SETTLE_MS)   # same settle as the victim so titles are comparable
         cur = spg.url or ""
         if not r or cur == "about:blank" or cur.startswith("about:"):
             # the scanner never actually loaded (timeout/blocked) — NOT evidence of cloaking

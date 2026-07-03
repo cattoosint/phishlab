@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import email
 import imaplib
+import json
 import os
 import re
 import time
@@ -24,6 +25,26 @@ HOST = "imap.gmail.com"
 INTERVAL = int(os.getenv("MAIL_POLL_INTERVAL") or "30")
 QUEUE: list[dict] = []      # most-recent-first intake items, for the GUI Inbox
 _task: asyncio.Task | None = None
+_STATE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "mail_state.json")
+
+
+def _load_uid():
+    """The last handled UID from a prior run, or None if this mailbox was never initialised."""
+    try:
+        with open(_STATE, encoding="utf-8") as f:
+            v = json.load(f).get("last_uid")
+            return int(v) if v is not None else None
+    except Exception:
+        return None
+
+
+def _save_uid() -> None:
+    try:
+        os.makedirs(os.path.dirname(_STATE), exist_ok=True)
+        with open(_STATE, "w", encoding="utf-8") as f:
+            json.dump({"last_uid": _last_uid}, f)
+    except Exception:
+        pass
 
 _DEFANG = [("hxxp", "http"), ("hXXp", "http"), ("hxxP", "http"), ("[.]", "."), ("(.)", "."),
            ("{.}", "."), ("[dot]", "."), (" dot ", "."), ("[:]", ":"), ("[/]", "/"),
@@ -67,7 +88,7 @@ def _decode(v) -> str:
         return str(v)
 
 
-_last_uid = 0    # watermark — only mail with a HIGHER UID than this (i.e. arrived after we started)
+_last_uid = -1   # -1 = not initialised this process; persisted to mail_state.json across restarts
 
 
 def _poll_once() -> list[dict]:
@@ -84,11 +105,16 @@ def _poll_once() -> list[dict]:
     try:
         M.login(u, p)
         M.select("INBOX")
-        if _last_uid == 0:                                     # first pass: watermark, ignore all history
-            typ, data = M.uid("search", None, "ALL")
-            uids = data[0].split() if data and data[0] else []
-            _last_uid = int(uids[-1]) if uids else 0
-            return []
+        if _last_uid == -1:                                    # first poll this process
+            saved = _load_uid()
+            if saved is not None:
+                _last_uid = saved                              # resume — catch mail forwarded during downtime
+            else:                                              # genuine first run: baseline, ignore all history
+                typ, data = M.uid("search", None, "ALL")
+                uids = data[0].split() if data and data[0] else []
+                _last_uid = int(uids[-1]) if uids else 0
+                _save_uid()
+                return []
         typ, data = M.uid("search", None, f"{_last_uid + 1}:*")
         for raw in (data[0].split() if data and data[0] else []):
             uid = int(raw)
@@ -104,6 +130,7 @@ def _poll_once() -> list[dict]:
             if not url:
                 continue                              # not the link format → never read/store the email
             out.append({"url": url, "from": _decode(hdr.get("From")), "subject": _decode(hdr.get("Subject"))})
+        _save_uid()          # persist the advanced watermark so downtime mail isn't lost on a restart
     finally:
         try:
             M.logout()
