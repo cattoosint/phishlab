@@ -8,6 +8,7 @@ NOT the phishing host itself.
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import socket
 from datetime import datetime, timezone
@@ -112,6 +113,88 @@ async def crtsh_recent(host: str) -> dict | None:
     return {"certs": len(data), "newest": newest}
 
 
+async def _dnsbl(query: str) -> set[str]:
+    try:
+        infos = await asyncio.get_event_loop().getaddrinfo(query, None, type=socket.SOCK_STREAM)
+        return {ai[4][0] for ai in infos}
+    except Exception:
+        return set()
+
+
+async def spamhaus_dbl(host: str) -> dict | None:
+    """Spamhaus Domain Block List — keyless DNS. 127.0.1.2-.106 = spam/phish/malware domain;
+    127.255.255.x = query blocked (public resolver) so the result is unreliable -> None."""
+    codes = await _dnsbl(f"{_registrable(host)}.dbl.spamhaus.org")
+    if any(c.startswith("127.255.255.") for c in codes):
+        return None
+    hits = sorted(c for c in codes if c.startswith("127.0.1."))
+    return {"listed": bool(hits), "codes": hits}
+
+
+async def spamhaus_zen(ip: str | None) -> dict | None:
+    """Spamhaus ZEN IP block list — keyless DNS. 127.0.0.2-.11 = listed."""
+    if not ip or not re.match(r"^\d{1,3}(\.\d{1,3}){3}$", ip):
+        return None
+    codes = await _dnsbl(f"{'.'.join(reversed(ip.split('.')))}.zen.spamhaus.org")
+    if any(c.startswith("127.255.255.") for c in codes):
+        return None
+    hits = sorted(c for c in codes if c.startswith("127.0.0."))
+    return {"listed": bool(hits), "codes": hits}
+
+
+async def safebrowsing(url: str) -> dict | None:
+    """Google Safe Browsing v4 — needs GOOGLE_SAFEBROWSING_KEY; degrades to None without it."""
+    key = os.getenv("GOOGLE_SAFEBROWSING_KEY")
+    if not key:
+        return None
+    body = {"client": {"clientId": "phishlab", "clientVersion": "0.1"},
+            "threatInfo": {"threatTypes": ["MALWARE", "SOCIAL_ENGINEERING", "UNWANTED_SOFTWARE"],
+                           "platformTypes": ["ANY_PLATFORM"], "threatEntryTypes": ["URL"],
+                           "threatEntries": [{"url": url}]}}
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT) as c:
+            r = await c.post(f"https://safebrowsing.googleapis.com/v4/threatMatches:find?key={key}", json=body)
+            if r.status_code == 200:
+                matches = r.json().get("matches") or []
+                return {"listed": bool(matches), "threats": sorted({m.get("threatType") for m in matches})}
+    except Exception:
+        pass
+    return None
+
+
+async def virustotal(host: str) -> dict | None:
+    """VirusTotal domain reputation — needs VIRUSTOTAL_KEY; degrades to None without it."""
+    key = os.getenv("VIRUSTOTAL_KEY")
+    if not key:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT, headers={"x-apikey": key}) as c:
+            r = await c.get(f"https://www.virustotal.com/api/v3/domains/{_registrable(host)}")
+            if r.status_code == 200:
+                stats = ((r.json().get("data") or {}).get("attributes") or {}).get("last_analysis_stats") or {}
+                return {"malicious": stats.get("malicious", 0), "suspicious": stats.get("suspicious", 0)}
+    except Exception:
+        pass
+    return None
+
+
+async def abuseipdb(ip: str | None) -> dict | None:
+    """AbuseIPDB IP reputation — needs ABUSEIPDB_KEY; degrades to None without it."""
+    key = os.getenv("ABUSEIPDB_KEY")
+    if not key or not ip:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT, headers={"Key": key, "Accept": "application/json"}) as c:
+            r = await c.get("https://api.abuseipdb.com/api/v2/check",
+                            params={"ipAddress": ip, "maxAgeInDays": "90"})
+            if r.status_code == 200:
+                d = r.json().get("data") or {}
+                return {"score": d.get("abuseConfidenceScore"), "reports": d.get("totalReports")}
+    except Exception:
+        pass
+    return None
+
+
 _FP_TECH = [
     ("WordPress", r"wp-content|wp-includes|/wp-json"),
     ("Squarespace", r"squarespace|static1\.squarespace"),
@@ -161,15 +244,23 @@ async def enrich(url: str) -> dict:
     host = (urlsplit(url).hostname or "").lower()
     if not host:
         return {}
-    rdap, ipi, uh, crt, fp, aitm_r = await asyncio.gather(
+    ip = None
+    try:                                            # resolve once so the IP-based checks can run in parallel
+        infos = await asyncio.get_event_loop().getaddrinfo(host, None, type=socket.SOCK_STREAM)
+        ip = infos[0][4][0]
+    except Exception:
+        pass
+    (rdap, ipi, uh, crt, fp, aitm_r, dbl, zen, gsb, vt, abuse) = await asyncio.gather(
         rdap_domain(host), ip_info(host), urlhaus_check(host), crtsh_recent(host), fingerprint(url),
-        A.analyze(url), return_exceptions=True)
+        A.analyze(url), spamhaus_dbl(host), spamhaus_zen(ip), safebrowsing(url), virustotal(host),
+        abuseipdb(ip), return_exceptions=True)
 
     def ok(x):
         return x if not isinstance(x, Exception) else None
 
     return {"host": host, "rdap": ok(rdap), "ip": ok(ipi), "urlhaus": ok(uh), "cert": ok(crt),
-            "fingerprint": ok(fp), "aitm": ok(aitm_r)}
+            "fingerprint": ok(fp), "aitm": ok(aitm_r), "spamhaus": {"dbl": ok(dbl), "zen": ok(zen)},
+            "safebrowsing": ok(gsb), "virustotal": ok(vt), "abuseipdb": ok(abuse)}
 
 
 def score_signals(enr: dict) -> list[tuple[int, str]]:
@@ -184,5 +275,19 @@ def score_signals(enr: dict) -> list[tuple[int, str]]:
             out.append((12, f"domain only {age}d old"))
     if ((enr or {}).get("urlhaus") or {}).get("listed"):
         out.append((30, "host is on the URLhaus malware/phishing blocklist"))
+    sh = (enr or {}).get("spamhaus") or {}
+    if (sh.get("dbl") or {}).get("listed"):
+        out.append((35, "domain on the Spamhaus DBL (phishing/malware blocklist)"))
+    if (sh.get("zen") or {}).get("listed"):
+        out.append((18, "host IP on the Spamhaus ZEN blocklist"))
+    gsb = (enr or {}).get("safebrowsing") or {}
+    if gsb.get("listed"):
+        out.append((40, f"Google Safe Browsing flags it: {', '.join(gsb.get('threats') or []) or 'listed'}"))
+    vt = (enr or {}).get("virustotal") or {}
+    if isinstance(vt.get("malicious"), int) and vt["malicious"] >= 3:
+        out.append((30, f"VirusTotal: {vt['malicious']} engines flag this domain malicious"))
+    ab = (enr or {}).get("abuseipdb") or {}
+    if isinstance(ab.get("score"), int) and ab["score"] >= 50:
+        out.append((15, f"AbuseIPDB abuse confidence {ab['score']}%"))
     out += A.score_signals((enr or {}).get("aitm") or {})   # AiTM / reverse-proxy toolkit signals
     return out

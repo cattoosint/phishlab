@@ -508,6 +508,7 @@ function render(rep){
     `<div class="kv"><span class="k">asn · geo</span><span class="v">${esc((ipx.asn||'—').split(',')[0])} · ${esc(ipx.country||'—')}</span></div>`+
     `<div class="kv"><span class="k">ip</span><span class="v">${esc(ipx.ip||'—')}</span></div>`+
     `<div class="kv"><span class="k">blocklist</span><span class="v" style="${uh.listed?'color:var(--bad)':''}">${uh.listed?('URLhaus LISTED'+(uh.threat?' ('+esc(uh.threat)+')':'')):(uh.listed===false?'not listed':'—')}</span></div>`+
+    (()=>{const rb=[],sh=en.spamhaus||{};if((sh.dbl||{}).listed)rb.push('Spamhaus DBL');if((sh.zen||{}).listed)rb.push('Spamhaus ZEN');if((en.safebrowsing||{}).listed)rb.push('SafeBrowsing');const vm=(en.virustotal||{}).malicious;if(typeof vm==='number'&&vm>0)rb.push('VirusTotal '+vm);const ab=(en.abuseipdb||{}).score;if(typeof ab==='number'&&ab>=25)rb.push('AbuseIPDB '+ab+'%');return rb.length?`<div class="kv"><span class="k" style="color:var(--bad)">reputation</span><span class="v" style="color:var(--bad)">${rb.map(esc).join(' · ')}</span></div>`:'';})()+
     ((tk||asc>0)?`<div class="kv"><span class="k">reverse-proxy</span><span class="v" style="color:var(--bad)">${tk?'⚠ '+esc(tk)+' (AiTM)':'suspected AiTM'} · ${asc} pts · ${(aitm.signals||[]).length} signal(s)</span></div>`:'')+
     `<div class="kv"><span class="k">newest cert</span><span class="v">${esc((ct.newest||'').slice(0,10)||'—')}</span></div>`+
     `<div class="kv"><span class="k">platform</span><span class="v">${esc(platform||'—')}</span></div>`+

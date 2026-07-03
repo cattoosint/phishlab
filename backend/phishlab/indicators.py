@@ -9,10 +9,56 @@ Every detection lives here in code, keyed by a stable id, so "why is this fake" 
 """
 from __future__ import annotations
 
+import base64
 import re
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
+
+import httpx
 
 SEV_SCORE = {"high": 22, "medium": 12, "low": 5}
+_JS_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:135.0) Gecko/20100101 Firefox/135.0"
+_SCRIPT_SRC = re.compile(r'<script[^>]+src=["\']([^"\']+)["\']', re.I)
+_B64_RUN = re.compile(r"[A-Za-z0-9+/]{60,}={0,2}")
+
+
+async def gather_scripts(base_url: str, html: str, max_files: int = 10, cap: int = 200_000) -> str:
+    """Fetch the page's SAME-HOST <script src> files and decode long base64 blobs, returning the
+    concatenated JS to append to the source blob. Kits stash the Telegram token / formsubmit / exfil
+    config in bundled .js that the HTML-only scan never sees — this is the biggest coverage gain.
+    SSRF-safe: same registrable domain only, no redirect-follow."""
+    host = (urlsplit(base_url).hostname or "").lower()
+    reg = ".".join(host.split(".")[-2:])
+    srcs: list[str] = []
+    for m in _SCRIPT_SRC.finditer(html or ""):
+        u = urljoin(base_url, m.group(1))
+        h = (urlsplit(u).hostname or "").lower()
+        if h and ".".join(h.split(".")[-2:]) == reg and u not in srcs:
+            srcs.append(u)
+        if len(srcs) >= max_files:
+            break
+    out: list[str] = []
+    try:
+        async with httpx.AsyncClient(timeout=8.0, verify=False, follow_redirects=False,
+                                     headers={"User-Agent": _JS_UA}) as c:
+            for u in srcs:
+                try:
+                    r = await c.get(u)
+                    if r.status_code != 200:
+                        continue
+                    js = (r.text or "")[:cap]
+                    out.append(js)
+                    for b in _B64_RUN.findall(js)[:20]:      # decode kit config hidden in base64
+                        try:
+                            dec = base64.b64decode(b + "===").decode("utf-8", "ignore")
+                            if len(dec) > 10 and dec.isprintable():
+                                out.append(dec)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return "\n".join(out)
 
 # id, severity, human title, compiled pattern (searched against the whole source, case-insensitive)
 _RULES: list[tuple[str, str, str, re.Pattern]] = [

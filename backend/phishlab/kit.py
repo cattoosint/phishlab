@@ -26,7 +26,7 @@ import httpx
 from . import extract as X
 
 TIMEOUT = 6.0
-MAX_PROBES = 30
+MAX_PROBES = 60
 MAX_TEXT = 300_000
 MAX_SAVE = 25 * 1024 * 1024
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0"
@@ -58,18 +58,21 @@ def _candidates(url: str) -> list[str]:
     labels = [p for p in dirpath.strip("/").split("/") if p]
     dirname = labels[-1] if labels else "kit"
     hostlabel = (sp.hostname or "").split(".")[0]
-    out = [base + dirpath, base + "/"]
-    for d in (dirpath, "/"):
-        for n in CRED_LOGS:
-            out.append(base + d + n)
-    if not path.endswith("/"):
-        for suf in SRC_SUFFIX:
-            out.append(base + path + suf)
+    base_c = [base + dirpath, base + "/"]           # open-dir / web root
+    cred_c = [base + d + n for d in (dirpath, "/") for n in CRED_LOGS]
+    src_c = [base + path + suf for suf in SRC_SUFFIX] if not path.endswith("/") else []
     names = list(dict.fromkeys([dirname, hostlabel, *ARCHIVE_NAMES]))
-    for d in (dirpath, "/"):
-        for n in names:
-            for ext in ARCHIVE_EXT:
-                out.append(f"{base}{d}{n}{ext}")
+    arch_c = [f"{base}{d}{n}{ext}" for d in (dirpath, "/") for n in names for ext in ARCHIVE_EXT]
+    # round-robin across the classes so ARCHIVES (the left-behind .zip) get probed within the budget —
+    # previously the cred-log block filled the cap first and no archive URL was ever fetched.
+    out = list(base_c)
+    classes = [arch_c, cred_c, src_c]
+    i = 0
+    while any(i < len(c) for c in classes):
+        for c in classes:
+            if i < len(c):
+                out.append(c[i])
+        i += 1
     seen, uniq = set(), []
     for u in out:
         if u not in seen:

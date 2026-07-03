@@ -139,6 +139,17 @@ class Session:
             # stream fast while the analyst is driving (handover), slower while automation runs
             await asyncio.sleep(0.12 if self.state == "handover" else FRAME_INTERVAL)
 
+    async def _sync_viewport(self, page):
+        """Track the page's REAL inner size so forwarded takeover clicks/drags map correctly. The victim
+        context has no fixed viewport (Camoufox sets its own), so page.viewport_size is often None/stale —
+        read innerWidth/innerHeight from the page. Called after load + each step so a slider solve lands."""
+        try:
+            vp = await page.evaluate("() => ({w: window.innerWidth, h: window.innerHeight})")
+            if vp and vp.get("w") and vp.get("h"):
+                self.viewport = {"width": vp["w"], "height": vp["h"]}
+        except Exception:
+            pass
+
     async def run(self):
         t0 = self.report["started_at"]
         frames = None
@@ -191,6 +202,7 @@ class Session:
                 except Exception:
                     self._log("(page slow to load — continuing with whatever rendered)")
                 await page.wait_for_timeout(SETTLE_MS)
+                await self._sync_viewport(page)      # accurate frame->page coord mapping for takeover
                 sc = await scanner_view(brw, self.url)
                 try:
                     vtitle = await page.title()
@@ -232,6 +244,7 @@ class Session:
                     if await self._checkpoint():          # analyst took over before this step
                         await page.wait_for_timeout(SETTLE_MS)
                     snap = await _snapshot(page)
+                    await self._sync_viewport(page)   # keep coord mapping current as the page navigates
                     all_html.append(snap["html"] or "")
                     forms = await B.detect_forms(page)
                     tg = X.telegram_channels(snap["html"] or "")
@@ -316,6 +329,15 @@ class Session:
                     break
 
                 joined = "\n".join(all_html)
+                try:                                          # kit exfil config often lives in bundled .js
+                    ext_js = await I.gather_scripts(self.url, joined)
+                    if ext_js:
+                        joined += "\n/*--external-js--*/\n" + ext_js
+                        for t in X.telegram_channels(ext_js):
+                            if t not in self.report["exfil"]["telegram"]:
+                                self.report["exfil"]["telegram"].append(t)
+                except Exception:
+                    pass
                 self.report["iocs"] = X.iocs(joined, self.url, extra_urls=[a for a in self.report["exfil"]["form_actions"] if a])
                 self.report["iocs"]["brands_impersonated"] = X.brand_hits(*[s.get("title", "") for s in self.report["steps"]])
                 self.report["indicators"] = I.analyze_source(joined, self.url)   # read the whole source
