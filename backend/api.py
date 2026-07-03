@@ -38,6 +38,7 @@ def _load_dotenv() -> None:
 _load_dotenv()
 
 from phishlab import mailbox as M        # noqa: E402  (import after .env is loaded)
+from phishlab import net_guard as G      # noqa: E402
 from phishlab import report as R         # noqa: E402
 from phishlab import session as S        # noqa: E402
 from phishlab import tracker as T        # noqa: E402
@@ -46,6 +47,19 @@ from phishlab.sandbox import detonate    # noqa: E402
 
 app = FastAPI(title="PhishLab", version="0.1.0")
 WEB = Path(__file__).parent / "web"
+
+_ALLOWED_HOSTS = {"127.0.0.1", "localhost", "::1"} | {
+    h.strip().lower() for h in (os.getenv("PHISH_ALLOWED_HOSTS") or "").split(",") if h.strip()}
+
+
+@app.middleware("http")
+async def _host_guard(request, call_next):
+    """DNS-rebinding defence — a malicious page can rebind its name to 127.0.0.1 but its Host header
+    stays the attacker domain, so only serve expected Hosts. Add others via PHISH_ALLOWED_HOSTS."""
+    host = (request.headers.get("host") or "").rsplit(":", 1)[0].strip().lower().strip("[]")
+    if host and host not in _ALLOWED_HOSTS:
+        return JSONResponse({"error": "forbidden host"}, status_code=403)
+    return await call_next(request)
 
 
 class DetonateReq(BaseModel):
@@ -91,8 +105,9 @@ async def api_detonate(req: DetonateReq):
         return JSONResponse({"error": "Enter a URL to detonate."}, status_code=400)
     if not url.lower().startswith(("http://", "https://")):
         url = "http://" + url
-    if _is_own_console(url):
-        return JSONResponse({"error": _OWN_CONSOLE_MSG}, status_code=400)
+    err = _guard(url)
+    if err:
+        return JSONResponse({"error": err}, status_code=400)
     try:
         return await detonate(url)
     except Exception as exc:  # detonation of a live/hostile page can fail many ways — report it
@@ -120,14 +135,26 @@ _OWN_CONSOLE_MSG = ("That's the PhishLab console itself — enter a suspect URL 
                     "or try the built-in test kit at /demo-phish/.")
 
 
+def _guard(url: str) -> str | None:
+    """Reason string if the URL must be refused (own console or an internal/SSRF target); else None."""
+    if _is_own_console(url):
+        return _OWN_CONSOLE_MSG
+    ok, why = G.check_target(url)
+    if not ok:
+        return (f"Refused — {why}. PhishLab only detonates public targets "
+                "(set PHISH_ALLOW_INTERNAL=1 to override for an internal test range).")
+    return None
+
+
 @app.post("/api/session")
 async def session_start(req: DetonateReq):
     """Start a LIVE detonation session; returns its id. Poll /state + /frame; POST /input + /resume."""
     url = _norm_url(req.url)
     if not url or url in ("http://", "https://"):
         return JSONResponse({"error": "Enter a URL to detonate."}, status_code=400)
-    if _is_own_console(url):
-        return JSONResponse({"error": _OWN_CONSOLE_MSG}, status_code=400)
+    err = _guard(url)
+    if err:
+        return JSONResponse({"error": err}, status_code=400)
     s = S.create(url)
     return {"id": s.id, "state": s.state}
 

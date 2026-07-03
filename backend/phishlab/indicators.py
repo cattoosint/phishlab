@@ -73,10 +73,13 @@ _BRANDS = ("microsoft", "office365", "office 365", "outlook", "onedrive", "share
 # page IS served from the brand's real domain it's not phishing. Suppresses brand/secret false positives
 # and caps the verdict when you detonate a genuine site (e.g. microsoft.com).
 LEGIT_DOMAINS = {
+    # NOTE: no multi-tenant hosting domains here (windows.net / amazonaws.com / azurewebsites.net /
+    # web.app / firebaseapp.com …) — a phish lives on a customer subdomain of those, so allowlisting
+    # them would zero out the verdict. Only single-owner registrable domains belong on this list.
     "microsoft.com", "live.com", "office.com", "office365.com", "outlook.com", "microsoftonline.com",
-    "windows.com", "windows.net", "xbox.com", "skype.com", "sharepoint.com", "onedrive.com", "msn.com",
-    "bing.com", "azure.com", "google.com", "gmail.com", "googlemail.com", "youtube.com", "android.com",
-    "goog.gl", "apple.com", "icloud.com", "me.com", "amazon.com", "amazonaws.com", "aws.amazon.com",
+    "windows.com", "xbox.com", "skype.com", "sharepoint.com", "onedrive.com", "msn.com",
+    "bing.com", "google.com", "gmail.com", "googlemail.com", "youtube.com", "android.com",
+    "goog.gl", "apple.com", "icloud.com", "me.com", "amazon.com",
     "paypal.com", "facebook.com", "instagram.com", "whatsapp.com", "meta.com", "messenger.com",
     "netflix.com", "linkedin.com", "twitter.com", "x.com", "dropbox.com", "adobe.com", "github.com",
     "gitlab.com", "atlassian.com", "slack.com", "zoom.us", "salesforce.com", "oracle.com", "ibm.com",
@@ -89,7 +92,8 @@ LEGIT_DOMAINS = {
 
 def _host(u: str) -> str:
     try:
-        return (urlsplit(u).hostname or "").lower().lstrip("www.")
+        h = (urlsplit(u).hostname or "").lower()
+        return h[4:] if h.startswith("www.") else h
     except Exception:
         return ""
 
@@ -135,7 +139,7 @@ def analyze_source(html: str, url: str) -> dict:
     if not legit:
         for b in _BRANDS:
             bkey = b.replace(" ", "")
-            if (b in title_txt or (low.count(b) >= 3)) and bkey not in host.replace(" ", "").replace("-", ""):
+            if re.search(r"\b" + re.escape(b) + r"\b", title_txt) and bkey not in host.replace(" ", "").replace("-", ""):
                 inds.append({"id": "brand_impersonation", "severity": "high",
                              "title": f"Impersonates a brand ({b}) on an unrelated domain", "evidence": b})
                 break

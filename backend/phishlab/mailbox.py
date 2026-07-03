@@ -116,13 +116,18 @@ async def _loop(detonate_cb) -> None:
     while True:
         if enabled():
             try:
+                from . import net_guard as G
                 for it in await asyncio.to_thread(_poll_once):
                     it["at"] = time.time()
                     it["sid"] = None
                     QUEUE.insert(0, it)
                     del QUEUE[60:]
+                    ok, why = G.check_target(it["url"])          # SSRF guard on forwarded URLs
+                    if not ok:
+                        it["skipped"] = why
+                        continue
                     try:
-                        it["sid"] = detonate_cb(it["url"])       # auto-detonate
+                        it["sid"] = detonate_cb(it["url"])        # auto-detonate
                     except Exception:
                         pass
             except Exception:

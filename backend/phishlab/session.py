@@ -8,6 +8,8 @@ and hits Resume, then the robotic step-through continues. No stepping out of the
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 import time
 import uuid
 from urllib.parse import quote, urlsplit
@@ -25,6 +27,51 @@ FRAME_INTERVAL = 0.4      # ~2.5 fps live view
 FRAME_QUALITY = 66
 
 SESSIONS: dict[str, "Session"] = {}
+CASES_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "cases")
+SESSION_CAP = int(os.getenv("PHISH_SESSION_CAP") or "50")   # sessions kept in RAM; older done ones evict to disk
+
+
+def _persist(sess) -> None:
+    """Write a finished detonation's evidence to disk so it survives a restart."""
+    try:
+        os.makedirs(CASES_DIR, exist_ok=True)
+        with open(os.path.join(CASES_DIR, sess.id + ".json"), "w", encoding="utf-8") as f:
+            json.dump({"id": sess.id, "state": sess.state, "report": sess.report, "saved_at": time.time()}, f)
+    except Exception:
+        pass
+
+
+def _evict() -> None:
+    """Bound RAM: drop the oldest done/error sessions from memory (their report is on disk)."""
+    if len(SESSIONS) <= SESSION_CAP:
+        return
+    done = sorted((s for s in SESSIONS.values() if s.state in ("done", "error")),
+                  key=lambda s: (s.report.get("started_at") or 0))
+    for s in done[:len(SESSIONS) - SESSION_CAP]:
+        SESSIONS.pop(s.id, None)
+
+
+class _Done:
+    """A completed session loaded from disk — report/evidence only, no live browser."""
+
+    def __init__(self, data):
+        self.id = data.get("id")
+        self.state = data.get("state", "done")
+        self.report = data.get("report") or {}
+        self.latest_frame = None
+        self.paused = False
+
+    def snapshot_state(self):
+        return {"id": self.id, "state": self.state, "paused": False, "report": self.report, "has_frame": False}
+
+    async def forward(self, ev):
+        pass
+
+    def request_takeover(self):
+        pass
+
+    def resume(self):
+        pass
 
 
 class Session:
@@ -304,6 +351,8 @@ class Session:
             self._page = None
             if frames:
                 frames.cancel()
+            _persist(self)     # retain the detonation evidence on disk (survives restart)
+            _evict()           # bound RAM: evict oldest finished sessions (report stays on disk)
 
     async def forward(self, ev: dict):
         """Forward an analyst input event to the live page (during handover). Coords are fractions
@@ -447,5 +496,12 @@ def create_report(url: str, target: str) -> "ReportSession":
     return s
 
 
-def get(sid: str) -> "Session | None":
-    return SESSIONS.get(sid)
+def get(sid: str):
+    s = SESSIONS.get(sid)
+    if s:
+        return s
+    try:                                    # evicted from RAM but evidence is on disk
+        with open(os.path.join(CASES_DIR, sid + ".json"), encoding="utf-8") as f:
+            return _Done(json.load(f))
+    except Exception:
+        return None

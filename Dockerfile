@@ -15,4 +15,6 @@ ENV PHISH_HEADFUL=0
 EXPOSE 8090
 
 # Serve the GUI + detonation API. (Run the engine self-test instead with: python demo.py)
-CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8090"]
+# bind loopback only — the console is unauthenticated; expose it via an authenticated reverse proxy
+# if you must reach it off-box. (compose maps 127.0.0.1:8090 to match.)
+CMD ["uvicorn", "api:app", "--host", "127.0.0.1", "--port", "8090"]

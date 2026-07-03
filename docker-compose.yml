@@ -13,7 +13,7 @@ services:
     # Detonation is heavy (a real browser); give it headroom.
     mem_limit: 2g
     ports:
-      - "8090:8090"     # GUI + API at http://localhost:8090
+      - "127.0.0.1:8090:8090"     # GUI + API at http://localhost:8090 (loopback only, unauthenticated)
 
 volumes:
   phishlab_data:

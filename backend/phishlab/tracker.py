@@ -327,6 +327,9 @@ async def network_trace(url: str) -> dict:
     """Network-level proof for a case — ICMP ping + a raw curl HEAD. Down/blocked hosts show it here
     (ping 'Request timed out' / 'could not find host'; curl connection error) as evidence."""
     host = (urlsplit(url).hostname or url)
+    if host.startswith("-"):     # never let a hostname be parsed by ping/curl as a flag
+        return {"host": host, "ping": "(refused: hostname starts with '-')", "curl": "(refused)",
+                "captured": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())}
     ping_cmd = (["ping", "-n", "3", "-w", "3000", host] if os.name == "nt"
                 else ["ping", "-c", "3", "-W", "3", host])
     ping, curl = await asyncio.gather(
