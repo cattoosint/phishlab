@@ -26,6 +26,8 @@ FIREFOX_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101
 # A crawler UA for the SCANNER identity — meant to look like a bot so the kit serves its decoy.
 SCANNER_UA = "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
 
+_USING_CAMOUFOX = False   # set True while a Camoufox browser is active (it owns its own fingerprint)
+
 
 @asynccontextmanager
 async def launch():
@@ -35,7 +37,25 @@ async def launch():
     invisible_playwright's real-fingerprint Firefox instead (better decloaking) — but it force-
     injects a viewport `screenSize` some Firefox builds reject, so we fall back to vanilla if it
     fails to launch. In PhishLab's own image the invisible_playwright + Firefox versions are pinned
-    compatible; here (Shadow's image) vanilla is the safe path for verifying the engine."""
+    compatible; here (Shadow's image) vanilla is the safe path for verifying the engine.
+
+    Set PHISH_BROWSER=camoufox to use Camoufox — a real-fingerprint Firefox (spoofed TLS/JA3, humanized
+    cursor) that reliably passes Cloudflare/Turnstile so the analyst can reach the actual phish. Falls
+    back to vanilla if Camoufox isn't installed (pip install camoufox && python -m camoufox fetch)."""
+    global _USING_CAMOUFOX
+    if (os.getenv("PHISH_BROWSER") or "").strip().lower() == "camoufox":
+        try:
+            from camoufox.async_api import AsyncCamoufox
+            async with AsyncCamoufox(headless=_HEADLESS, humanize=True) as browser:
+                _USING_CAMOUFOX = True
+                try:
+                    yield browser
+                finally:
+                    _USING_CAMOUFOX = False
+                return
+        except Exception as exc:
+            _USING_CAMOUFOX = False
+            logger.warning("Camoufox unavailable (%s) — falling back to vanilla Firefox", exc)
     if (os.getenv("PHISH_STEALTH") or "").strip().lower() in ("1", "true", "yes", "on"):
         try:
             from invisible_playwright.async_api import InvisiblePlaywright
@@ -67,6 +87,9 @@ async def new_victim_context(browser, *, locale="en-US", tz="America/New_York"):
     """A convincing victim: real UA, JS on, real locale/timezone, + a light anti-bot patch
     (navigator.webdriver=false). NB: do NOT pass an explicit `viewport` — invisible_playwright injects
     a `screenSize` alongside it that this Firefox build's protocol rejects."""
+    if _USING_CAMOUFOX:
+        # Camoufox supplies its own coherent fingerprint (UA/TLS/JA3/canvas) — don't override the UA
+        return await browser.new_context(java_script_enabled=True, locale=locale, timezone_id=tz)
     ctx = await browser.new_context(
         java_script_enabled=True, user_agent=FIREFOX_UA, locale=locale, timezone_id=tz)
     try:

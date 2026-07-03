@@ -33,9 +33,16 @@ if exist "tor\tor\tor.exe" (
   set "PHISH_TRACK_VANTAGES=tor=socks5://127.0.0.1:9050"
 )
 
+REM ── find the Wi-Fi LAN IP so homies on the same network can reach it ──
+set "LANIP="
+for /f "usebackq delims=" %%i in (`powershell -NoProfile -Command "(Get-NetIPAddress -AddressFamily IPv4 ^| Where-Object {$_.InterfaceAlias -like '*Wi-Fi*' -and $_.IPAddress -notlike '169.*'} ^| Select-Object -First 1).IPAddress"`) do set "LANIP=%%i"
+
 echo.
-echo   PhishLab running at http://127.0.0.1:%PORT%   (close this window to stop)
+echo   PhishLab running   ^(close this window to stop^)
+echo     You:    http://127.0.0.1:%PORT%
+if defined LANIP echo     Homies: http://%LANIP%:%PORT%   ^(same Wi-Fi^)
 echo.
-REM open the browser a moment after the server starts
-start "" cmd /c "timeout /t 3 >nul & start "" http://127.0.0.1:%PORT%/"
-python -m uvicorn api:app --app-dir backend --host 127.0.0.1 --port %PORT%
+REM open the console locally a moment after the server starts (skip when auto-started on boot)
+if not defined PHISH_NO_BROWSER start "" cmd /c "timeout /t 3 >nul & start "" http://127.0.0.1:%PORT%/"
+REM bind all interfaces so the LAN can reach it; the Host-guard limits callers to localhost + private IPs
+python -m uvicorn api:app --app-dir backend --host 0.0.0.0 --port %PORT%

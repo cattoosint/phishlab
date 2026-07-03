@@ -7,6 +7,7 @@ it only on the dedicated detonation host.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import os
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -52,12 +53,23 @@ _ALLOWED_HOSTS = {"127.0.0.1", "localhost", "::1"} | {
     h.strip().lower() for h in (os.getenv("PHISH_ALLOWED_HOSTS") or "").split(",") if h.strip()}
 
 
+def _host_ok(host: str) -> bool:
+    if not host or host in _ALLOWED_HOSTS:
+        return True
+    try:                                    # allow LAN access (bound 0.0.0.0) via any private/loopback IP
+        ip = ipaddress.ip_address(host)
+        return ip.is_private or ip.is_loopback
+    except ValueError:
+        return False                        # a domain-name Host that isn't allowlisted -> reject (rebind defence)
+
+
 @app.middleware("http")
 async def _host_guard(request, call_next):
-    """DNS-rebinding defence — a malicious page can rebind its name to 127.0.0.1 but its Host header
-    stays the attacker domain, so only serve expected Hosts. Add others via PHISH_ALLOWED_HOSTS."""
+    """DNS-rebinding defence — a malicious page can rebind its name to a private IP but its Host header
+    stays the attacker domain, so serve only localhost / LAN-IP / allowlisted Hosts. LAN IP literals are
+    allowed (for homie testing on 0.0.0.0); domain names must be in PHISH_ALLOWED_HOSTS."""
     host = (request.headers.get("host") or "").rsplit(":", 1)[0].strip().lower().strip("[]")
-    if host and host not in _ALLOWED_HOSTS:
+    if not _host_ok(host):
         return JSONResponse({"error": "forbidden host"}, status_code=403)
     return await call_next(request)
 
