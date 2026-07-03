@@ -44,18 +44,33 @@ async def launch():
     back to vanilla if Camoufox isn't installed (pip install camoufox && python -m camoufox fetch)."""
     global _USING_CAMOUFOX
     if (os.getenv("PHISH_BROWSER") or "").strip().lower() == "camoufox":
+        cm = browser = None
         try:
             from camoufox.async_api import AsyncCamoufox
-            async with AsyncCamoufox(headless=_HEADLESS, humanize=True) as browser:
-                _USING_CAMOUFOX = True
-                try:
-                    yield browser
-                finally:
-                    _USING_CAMOUFOX = False
-                return
+            # a coherent real-desktop identity: Windows fingerprint, human cursor, no WebRTC IP leak,
+            # + geoip (tz/locale/geo derived from the egress IP) when camoufox[geoip] is installed.
+            opts = {"headless": _HEADLESS, "humanize": True, "os": "windows", "block_webrtc": True}
+            try:
+                import geoip2  # noqa: F401
+                opts["geoip"] = True
+            except Exception:
+                pass
+            cm = AsyncCamoufox(**opts)
+            browser = await cm.__aenter__()      # LAUNCH only is guarded — fall back to vanilla if it fails
         except Exception as exc:
-            _USING_CAMOUFOX = False
+            cm = None
             logger.warning("Camoufox unavailable (%s) — falling back to vanilla Firefox", exc)
+        if cm is not None:
+            _USING_CAMOUFOX = True
+            try:
+                yield browser                     # caller errors propagate correctly (not swallowed -> no athrow)
+            finally:
+                _USING_CAMOUFOX = False
+                try:
+                    await cm.__aexit__(None, None, None)
+                except Exception:
+                    pass
+            return
     if (os.getenv("PHISH_STEALTH") or "").strip().lower() in ("1", "true", "yes", "on"):
         try:
             from invisible_playwright.async_api import InvisiblePlaywright

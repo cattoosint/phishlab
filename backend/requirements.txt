@@ -7,4 +7,4 @@ uvicorn[standard]>=0.29,<1
 httpx[socks]>=0.26,<1   # [socks] = Tor/SOCKS proxy support for the multi-vantage tracker
 # Camoufox — real-fingerprint Firefox that passes Cloudflare/Turnstile. Set PHISH_BROWSER=camoufox to
 # use it (falls back to vanilla Firefox if the binary isn't fetched: python -m camoufox fetch).
-camoufox==0.4.11
+camoufox[geoip]==0.4.11
