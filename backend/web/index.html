@@ -231,7 +231,7 @@
       <button class="go" id="resume" style="display:none;padding:7px 16px">▶ Resume automation</button>
       <span class="live-hint" id="lhint"></span>
     </div>
-    <div class="live-stage" id="lstage"><img id="limg" alt="" tabindex="0"></div>
+    <div class="live-stage" id="lstage"><img id="limg" alt="" tabindex="0" draggable="false" style="user-select:none;-webkit-user-drag:none"></div>
     <div class="console" id="lconsole" style="margin-top:12px;max-height:150px"></div>
   </div>
 
@@ -351,11 +351,19 @@ function _startPoll(sid){
 
 async function _send(ev){ if(_sid) try{ await fetch('/api/session/'+_sid+'/input',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(ev)}); }catch(e){} }
 const _hv=()=>_sid && $('#ls').className.indexOf('hv')>=0;   // in handover / took over
-$('#limg').addEventListener('click',(e)=>{
-  if(!_hv()) return; e.target.focus();
-  const r=e.target.getBoundingClientRect();
-  _send({type:'click',x:(e.clientX-r.left)/r.width,y:(e.clientY-r.top)/r.height});
+const _fxy=(e)=>{ const r=$('#limg').getBoundingClientRect();
+  return {x:Math.max(0,Math.min(1,(e.clientX-r.left)/r.width)), y:Math.max(0,Math.min(1,(e.clientY-r.top)/r.height))}; };
+let _drag=false, _lastMove=0;
+$('#limg').addEventListener('mousedown',(e)=>{        // press = drag start; a quick press+release = a click
+  if(!_hv()) return; e.preventDefault();               // stop the browser grabbing the <img> as a drag-image
+  $('#limg').focus(); _drag=true; const p=_fxy(e); _send({type:'mousedown',x:p.x,y:p.y});
 });
+window.addEventListener('mousemove',(e)=>{             // drag motion → forwarded so slider CAPTCHAs move
+  if(!_drag) return; const now=Date.now(); if(now-_lastMove<16) return; _lastMove=now;   // ~60fps
+  const p=_fxy(e); _send({type:'mousemove',x:p.x,y:p.y});
+});
+window.addEventListener('mouseup',(e)=>{ if(!_drag) return; _drag=false; const p=_fxy(e); _send({type:'mouseup',x:p.x,y:p.y}); });
+$('#limg').addEventListener('dragstart',(e)=>e.preventDefault());   // never native-drag the frame image
 $('#limg').addEventListener('wheel',(e)=>{
   if(!_hv()) return; e.preventDefault();
   const r=e.target.getBoundingClientRect();

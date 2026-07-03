@@ -366,6 +366,17 @@ class Session:
                 x = float(ev.get("x", 0)) * self.viewport["width"]
                 y = float(ev.get("y", 0)) * self.viewport["height"]
                 await pg.mouse.click(x, y)
+            elif t == "mousedown":                          # start of a drag (slider CAPTCHAs)
+                await pg.mouse.move(float(ev.get("x", 0)) * self.viewport["width"],
+                                    float(ev.get("y", 0)) * self.viewport["height"])
+                await pg.mouse.down()
+            elif t == "mousemove":                          # drag motion — stepped so the site sees real movement
+                await pg.mouse.move(float(ev.get("x", 0)) * self.viewport["width"],
+                                    float(ev.get("y", 0)) * self.viewport["height"], steps=3)
+            elif t == "mouseup":
+                await pg.mouse.move(float(ev.get("x", 0)) * self.viewport["width"],
+                                    float(ev.get("y", 0)) * self.viewport["height"])
+                await pg.mouse.up()
             elif t == "scroll":
                 dx, dy = float(ev.get("dx", 0)), float(ev.get("dy", 0))
                 try:
