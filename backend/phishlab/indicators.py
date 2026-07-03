@@ -31,7 +31,7 @@ _RULES: list[tuple[str, str, str, re.Pattern]] = [
     ("password_field", "medium", "Collects a password",
      re.compile(r"type\s*=\s*['\"]?password", re.I)),
     ("sensitive_fields", "high", "Asks for high-value secrets (card / CVV / SSN / seed phrase / PIN)",
-     re.compile(r"cvv|cvc|card\s*number|ccnum|\bcard\s*no\b|social\s*security|\bssn\b|"
+     re.compile(r"\bcvv\b|\bcvc\b|card\s*number|\bccnum\b|\bcard\s*no\b|social\s*security|\bssn\b|"
                 r"seed\s*phrase|mnemonic|recovery\s*phrase|routing\s*number|sort\s*code|\biban\b", re.I)),
     ("grabs_form_values", "medium", "Reads form values in JS and posts them onward",
      re.compile(r"\.value\s*[;,)].{0,40}(fetch|xmlhttprequest|\.ajax|\.send\()", re.I | re.S)),
@@ -69,6 +69,23 @@ _BRANDS = ("microsoft", "office365", "office 365", "outlook", "onedrive", "share
            "chase", "wellsfargo", "bank of america", "coinbase", "binance", "metamask", "dhl",
            "fedex", "ups", "linkedin", "docusign", "adobe", "wetransfer")
 
+# Known-legitimate registrable domains — a phish impersonates a brand on a DIFFERENT domain, so if the
+# page IS served from the brand's real domain it's not phishing. Suppresses brand/secret false positives
+# and caps the verdict when you detonate a genuine site (e.g. microsoft.com).
+LEGIT_DOMAINS = {
+    "microsoft.com", "live.com", "office.com", "office365.com", "outlook.com", "microsoftonline.com",
+    "windows.com", "windows.net", "xbox.com", "skype.com", "sharepoint.com", "onedrive.com", "msn.com",
+    "bing.com", "azure.com", "google.com", "gmail.com", "googlemail.com", "youtube.com", "android.com",
+    "goog.gl", "apple.com", "icloud.com", "me.com", "amazon.com", "amazonaws.com", "aws.amazon.com",
+    "paypal.com", "facebook.com", "instagram.com", "whatsapp.com", "meta.com", "messenger.com",
+    "netflix.com", "linkedin.com", "twitter.com", "x.com", "dropbox.com", "adobe.com", "github.com",
+    "gitlab.com", "atlassian.com", "slack.com", "zoom.us", "salesforce.com", "oracle.com", "ibm.com",
+    "cisco.com", "intuit.com", "docusign.com", "wetransfer.com", "coinbase.com", "binance.com",
+    "kraken.com", "dhl.com", "fedex.com", "ups.com", "usps.com", "chase.com", "bankofamerica.com",
+    "wellsfargo.com", "citi.com", "capitalone.com", "americanexpress.com", "hsbc.com", "barclays.co.uk",
+    "dbs.com.sg", "posb.com.sg", "ocbc.com", "uob.com.sg", "cloudflare.com", "akamai.com",
+}
+
 
 def _host(u: str) -> str:
     try:
@@ -77,14 +94,30 @@ def _host(u: str) -> str:
         return ""
 
 
+def _registrable(host: str) -> str:
+    parts = (host or "").lower().split(".")
+    if len(parts) >= 3 and parts[-2] in ("co", "com", "org", "net", "gov", "ac"):
+        return ".".join(parts[-3:])
+    return ".".join(parts[-2:]) if len(parts) >= 2 else host
+
+
+def is_legit(host_or_url: str) -> bool:
+    h = host_or_url if "/" not in host_or_url else (urlsplit(host_or_url).hostname or "")
+    return _registrable(h) in LEGIT_DOMAINS
+
+
 def analyze_source(html: str, url: str) -> dict:
     """Scan the full page source. Returns {indicators:[{id,severity,title,evidence}], score, brand_flag}."""
     src = html or ""
     low = src.lower()
     inds: list[dict] = []
     seen: set[str] = set()
+    host = _host(url)
+    legit = is_legit(url)   # a genuine brand domain — suppress brand/secret false positives
 
     for rid, sev, title, pat in _RULES:
+        if legit and rid == "sensitive_fields":
+            continue          # a legit site (e.g. a real bank/checkout) asking for a CVV isn't phishing
         m = pat.search(src)
         if not m or rid in seen:
             continue
@@ -93,18 +126,19 @@ def analyze_source(html: str, url: str) -> dict:
         ev = (ev[:60] + "…") if len(ev) > 61 else ev
         inds.append({"id": rid, "severity": sev, "title": title, "evidence": ev.strip()})
 
-    # brand impersonation: a brand named prominently on a domain that ISN'T that brand's
-    host = _host(url)
+    # brand impersonation: a brand named prominently on a domain that ISN'T that brand's (never on a
+    # legit domain — microsoft.com naming "outlook"/"office" is its own products, not impersonation)
     title_txt = ""
     tm = re.search(r"<title[^>]*>(.*?)</title>", low, re.S)
     if tm:
         title_txt = tm.group(1)
-    for b in _BRANDS:
-        bkey = b.replace(" ", "")
-        if (b in title_txt or (low.count(b) >= 3)) and bkey not in host.replace(" ", "").replace("-", ""):
-            inds.append({"id": "brand_impersonation", "severity": "high",
-                         "title": f"Impersonates a brand ({b}) on an unrelated domain", "evidence": b})
-            break
+    if not legit:
+        for b in _BRANDS:
+            bkey = b.replace(" ", "")
+            if (b in title_txt or (low.count(b) >= 3)) and bkey not in host.replace(" ", "").replace("-", ""):
+                inds.append({"id": "brand_impersonation", "severity": "high",
+                             "title": f"Impersonates a brand ({b}) on an unrelated domain", "evidence": b})
+                break
 
     # off-host form action / off-host POST target (creds leaving the site)
     for m in re.finditer(r"<form[^>]*\saction\s*=\s*['\"]([^'\"]+)['\"]", src, re.I):

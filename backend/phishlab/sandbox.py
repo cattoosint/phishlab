@@ -233,6 +233,12 @@ def _merge_ip(report: dict) -> None:
 
 
 def _verdict(r: dict) -> dict:
+    # a known-legitimate domain (microsoft.com etc.) is not phishing — don't let brand/login/secret
+    # signals on the real site produce a false verdict.
+    host = _host(((r.get("decloak") or {}).get("victim") or {}).get("url") or r.get("url") or "")
+    if I.is_legit(host):
+        return {"label": "legitimate", "score": 0,
+                "reasons": ["known-legitimate domain (allowlisted) — not phishing"]}
     score, reasons = 0, []
     if r["exfil"]["telegram"]:
         score += 60
