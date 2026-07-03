@@ -497,6 +497,7 @@ function render(rep){
 
   // enrichment
   const en=rep.enrichment||{}, rd=en.rdap||{}, ipx=en.ip||{}, uh=en.urlhaus||{}, ct=en.cert||{}, fp=en.fingerprint||{};
+  const aitm=en.aitm||{}, tk=aitm.toolkit, asc=aitm.aitm_score||0;
   const young=(typeof rd.age_days==='number'&&rd.age_days<30);
   const platform=[fp.server,fp.powered_by,fp.generator].filter(Boolean).join(' · ');
   $('#enrich').innerHTML = en.host ? (
@@ -507,6 +508,7 @@ function render(rep){
     `<div class="kv"><span class="k">asn · geo</span><span class="v">${esc((ipx.asn||'—').split(',')[0])} · ${esc(ipx.country||'—')}</span></div>`+
     `<div class="kv"><span class="k">ip</span><span class="v">${esc(ipx.ip||'—')}</span></div>`+
     `<div class="kv"><span class="k">blocklist</span><span class="v" style="${uh.listed?'color:var(--bad)':''}">${uh.listed?('URLhaus LISTED'+(uh.threat?' ('+esc(uh.threat)+')':'')):(uh.listed===false?'not listed':'—')}</span></div>`+
+    ((tk||asc>0)?`<div class="kv"><span class="k">reverse-proxy</span><span class="v" style="color:var(--bad)">${tk?'⚠ '+esc(tk)+' (AiTM)':'suspected AiTM'} · ${asc} pts · ${(aitm.signals||[]).length} signal(s)</span></div>`:'')+
     `<div class="kv"><span class="k">newest cert</span><span class="v">${esc((ct.newest||'').slice(0,10)||'—')}</span></div>`+
     `<div class="kv"><span class="k">platform</span><span class="v">${esc(platform||'—')}</span></div>`+
     `<div class="kv"><span class="k">tech stack</span><span class="v">${esc((fp.tech||[]).join(', ')||'—')}</span></div>`
