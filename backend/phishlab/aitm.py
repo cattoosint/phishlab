@@ -18,6 +18,8 @@ import asyncio
 import re
 import secrets
 import socket
+import ssl
+import time
 from urllib.parse import urlsplit
 
 import httpx
@@ -179,35 +181,147 @@ def _infer_toolkit(sigs: list[dict]) -> str | None:
     return max(tally, key=tally.get) if tally else None
 
 
+# ── Transport-layer probes — catch a proxy that leaks NO header/cookie tell ───────
+_FREE_CA = ("let's encrypt", "zerossl", "buypass", "google trust services")
+# Major brands that use their own / DigiCert-class CAs — never Let's Encrypt for production login.
+_MAJOR_BRAND = {
+    "Microsoft": r"microsoft|office\s*365|outlook|onedrive|sharepoint",
+    "Google": r"\bgoogle\b|gmail|google\s*workspace",
+    "Apple": r"apple\s*id|icloud",
+    "PayPal": r"\bpaypal\b", "Okta": r"\bokta\b",
+    "Amazon": r"amazon\s*web\s*services|aws\s*(console|sign)",
+}
+
+
+def _claimed_brand(html: str, title: str) -> str | None:
+    blob = ((title or "") + " " + (html or "")[:20000]).lower()
+    for brand, pat in _MAJOR_BRAND.items():
+        if re.search(pat, blob, re.I):
+            return brand
+    return None
+
+
+def _cert_info(host: str, port: int):
+    """(issuer_str, self_signed) for the live served leaf cert. Blocking — run via asyncio.to_thread."""
+    try:
+        ctx = ssl.create_default_context()
+        with socket.create_connection((host, port), timeout=6) as sock:
+            with ctx.wrap_socket(sock, server_hostname=host) as ss:
+                cert = ss.getpeercert() or {}
+        issuer = ""
+        for tup in cert.get("issuer", ()):
+            for k, v in tup:
+                if k in ("organizationName", "commonName"):
+                    issuer += " " + str(v)
+        return issuer.strip().lower(), False
+    except ssl.SSLCertVerificationError as e:
+        return "", "self" in str(e).lower() and "signed" in str(e).lower()
+    except Exception:
+        return None, False
+
+
+async def cert_probe(host: str, port: int, brand: str | None) -> list[dict]:
+    issuer, self_signed = await asyncio.to_thread(_cert_info, host, port)
+    out: list[dict] = []
+    if self_signed:
+        out.append({"name": "self_signed_cert", "toolkit": "Modlishka", "score": 35, "tier": "tls",
+                    "evidence": "served leaf cert is self-signed (proxy default; real logins never are)"})
+    if issuer and brand and any(fc in issuer for fc in _FREE_CA):
+        out.append({"name": "cert_brand_incoherence", "toolkit": None, "score": 30, "tier": "tls",
+                    "evidence": f"page claims {brand} but cert from a free CA ({issuer[:40]}) — {brand} doesn't use one"})
+    return out
+
+
+def _timing(host: str, port: int, n: int = 5):
+    tcp, tls = [], []
+    for _ in range(n):
+        s = None
+        try:
+            t = time.perf_counter()
+            s = socket.create_connection((host, port), timeout=5)
+            tcp.append(time.perf_counter() - t)
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            t2 = time.perf_counter()
+            ss = ctx.wrap_socket(s, server_hostname=host)
+            tls.append(time.perf_counter() - t2)
+            ss.close()
+        except Exception:
+            if s:
+                try:
+                    s.close()
+                except Exception:
+                    pass
+    if len(tcp) < 3 or len(tls) < 3:
+        return None
+    min_tcp = min(tcp)
+    if min_tcp < 0.005:                       # LAN / same-host — ratio unreliable
+        return None
+    med_tls = sorted(tls)[len(tls) // 2]
+    return {"ratio": round(med_tls / min_tcp, 1), "min_tcp_ms": round(min_tcp * 1000, 1),
+            "med_tls_ms": round(med_tls * 1000, 1)}
+
+
+async def timing_probe(host: str, port: int, cdn: str | None) -> dict | None:
+    """Phoca method: a reverse proxy completes a SECOND TLS session (to the real origin) during the
+    client handshake, so median(TLS handshake)/min(TCP connect) balloons (~12-40x) vs ~1-4x direct.
+    CDN- and LAN-gated; conservative weight because internet timing is noisy."""
+    if cdn:
+        return None
+    t = await asyncio.to_thread(_timing, host, port)
+    if not t:
+        return None
+    r = t["ratio"]
+    sc = 35 if r >= 25 else 20 if r >= 15 else 0
+    if not sc:
+        return None
+    return {"name": "tls_timing_proxy_hop", "toolkit": None, "score": sc, "tier": "tls",
+            "evidence": f"TLS handshake {r}x the TCP RTT ({t['med_tls_ms']}ms vs {t['min_tcp_ms']}ms): extra proxy hop"}
+
+
 async def analyze(url: str) -> dict:
-    """Run the AiTM probes and return {signals, toolkit, aitm_score, cdn}. Best-effort; safe on any host."""
+    """Run the AiTM probes and return {signals, toolkit, brand, aitm_score, cdn}. Best-effort; safe."""
     host = _host(url)
-    scheme = (urlsplit(url).scheme or "http").lower()
+    sp = urlsplit(url)
+    scheme = (sp.scheme or "http").lower()
+    port = sp.port or (443 if scheme == "https" else 80)
     if not host:
         return {"signals": [], "toolkit": None, "aitm_score": 0, "cdn": None}
 
     headers: dict = {}
     set_cookies: list[str] = []
+    html, title = "", ""
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT, verify=False, follow_redirects=True,
                                      headers={"User-Agent": BROWSER_UA}) as c:
             r = await c.get(url)
             headers = dict(r.headers)
             set_cookies = list(r.headers.get_list("set-cookie"))
+            html = (r.text or "")[:60000]
+            m = re.search(r"<title[^>]*>(.*?)</title>", html, re.I | re.S)
+            title = m.group(1) if m else ""
     except Exception:
         pass
 
     cdn = _is_cdn(headers)
-    wildcard = await wildcard_dns_probe(host, cdn)
+    brand = _claimed_brand(html, title)
+
+    tasks = [wildcard_dns_probe(host, cdn)]
+    if scheme == "https" and not _is_ip(host):
+        tasks += [cert_probe(host, port, brand), timing_probe(host, port, cdn)]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
 
     sigs: list[dict] = []
     sigs += analyze_headers(headers, cdn, url)
     sigs += analyze_cookies(set_cookies, scheme)
     sigs += analyze_url(url)
-    if wildcard:
-        sigs.append(wildcard)
+    for res in results:
+        if isinstance(res, Exception) or not res:
+            continue
+        sigs += res if isinstance(res, list) else [res]
 
-    return {"signals": sigs, "toolkit": _infer_toolkit(sigs),
+    return {"signals": sigs, "toolkit": _infer_toolkit(sigs), "brand": brand,
             "aitm_score": min(100, sum(int(s.get("score", 0)) for s in sigs)), "cdn": cdn}
 
 

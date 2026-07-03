@@ -403,3 +403,28 @@ _PHISH_PAGES = {"": _PHISH_LOGIN, "verify": _PHISH_WAIT, "otp": _PHISH_OTP, "don
 @app.api_route("/demo-phish/{page:path}", methods=["GET", "POST"])
 async def demo_phish(page: str = ""):
     return HTMLResponse(_PHISH_PAGES.get(page.strip("/"), _PHISH_LOGIN))
+
+
+# ── built-in AiTM/reverse-proxy MOCK (safe) to test aitm.py end-to-end ────────────────────────────
+# Reproduces only the OBSERVABLE fingerprints of Evilginx/Modlishka (headers + cookies) — it does NOT
+# proxy anything, capture credentials, or make any outside connection. Detonate:
+#   http://127.0.0.1:8090/demo-aitm/evilginx   or   http://127.0.0.1:8090/demo-aitm/modlishka
+_AITM_LOGIN = ("<!doctype html><html><head><title>Sign in to your Microsoft account</title>" + _PHISH_CSS +
+               "</head><body><div class='box'><div class='logo'>Microsoft</div><h1>Sign in</h1>"
+               "<form method='POST' action='#'><input type='email' name='login' placeholder='Email'>"
+               "<input type='password' name='passwd' placeholder='Password'>"
+               "<button>Sign in</button></form></div></body></html>")
+
+
+@app.api_route("/demo-aitm/{variant}", methods=["GET", "POST"])
+async def demo_aitm(variant: str = "evilginx"):
+    resp = HTMLResponse(_AITM_LOGIN)
+    if variant.strip("/").lower() == "modlishka":
+        # Modlishka's default trackingCookie is 'id'=UUID (and on HTTPS it strips the Secure flag)
+        resp.headers["set-cookie"] = "id=550e8400-e29b-41d4-a716-446655440000; Path=/; HttpOnly"
+        resp.headers["cache-control"] = "no-cache, no-store"
+    else:  # evilginx
+        resp.headers["x-evilginx"] = "operator@example.test"       # toolkit header leaked into the response
+        resp.headers["set-cookie"] = "__el=eyJsdXJlIjoibXMifQ; Path=/"
+        resp.headers["cache-control"] = "no-cache, no-store"
+    return resp
