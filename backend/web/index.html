@@ -532,6 +532,8 @@ function render(rep){
   const nw=rep.network||{};
   $('#network').innerHTML = (nw.count!=null) ? (
     `<div class="kv"><span class="k">requests</span><span class="v">${nw.count||0} · ${(nw.hosts||[]).length} off-host</span></div>`+
+    ((nw.credential_exfil||[]).length?`<div class="kv"><span class="k" style="color:var(--bad)">⚠ credentials exfiltrated</span></div><ul class="list">${nw.credential_exfil.map(c=>`<li class="tel-row" style="color:var(--bad)">[${esc((c.fields||[]).join(', '))}] → <b>${esc(c.host||'')}</b></li>`).join('')}</ul>`:'')+
+    ((nw.relay_to||[]).length?`<div class="kv"><span class="k" style="color:var(--bad)">⚠ reverse-proxy relay</span><span class="v" style="color:var(--bad)">${nw.relay_to.map(esc).join(', ')} · real backend (AiTM)</span></div>`:'')+
     ((nw.exfil||[]).length?`<div class="kv"><span class="k">data sent to (POST/xhr)</span></div><ul class="list">${nw.exfil.slice(0,12).map(x=>`<li class="tel-row">${esc(x.method)} ${esc(x.url)}</li>`).join('')}</ul>`:'')+
     ((nw.hosts||[]).length?`<div class="kv"><span class="k">off-host contacted</span></div><ul class="list">${nw.hosts.slice(0,15).map(h=>`<li>${esc(h)}</li>`).join('')}</ul>`:'')
   ) : `<div class="empty-note">—</div>`;

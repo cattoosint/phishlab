@@ -159,11 +159,18 @@ class Session:
                 frames = asyncio.create_task(self._frame_loop())
                 chain: list[str] = []
                 net: list[dict] = []
+                filled_vals: set[str] = set()      # fake values we typed — to diff against what got transmitted
 
                 def _on_req(req):
                     try:
                         if len(net) < 300:
-                            net.append({"method": req.method, "url": req.url, "type": req.resource_type})
+                            e = {"method": req.method, "url": req.url, "type": req.resource_type}
+                            if req.method in ("POST", "PUT", "PATCH") or req.resource_type in ("xhr", "fetch"):
+                                try:
+                                    e["body"] = (req.post_data or "")[:3000]   # what actually left the box
+                                except Exception:
+                                    e["body"] = ""
+                            net.append(e)
                     except Exception:
                         pass
 
@@ -276,6 +283,7 @@ class Session:
                     filled = await B.fill_fields(page, fake)
                     acted.add(snap["url"])
                     if filled:
+                        filled_vals.update(str(x.get("value", "")) for x in filled if len(str(x.get("value", ""))) >= 4)
                         dest = next((f.get("action") for f in forms if f.get("action")), None) or snap["url"]
                         off = bool(_host(dest) and _host(dest) != _host(snap["url"]))
                         summary = ", ".join(f"{x['kind']}={x['value']}" for x in filled)
@@ -328,16 +336,39 @@ class Session:
                         self.report["exfil"]["telegram"].append(t)
             except Exception:
                 self.report["kit"] = {}
-            # network routing — off-host requests the page made (esp. POST/xhr/fetch = where data goes)
+            # network routing — off-host requests + AUTHORITATIVE exfil (typed-vs-transmitted diff) + AiTM relay
             try:
+                _BACKENDS = ("login.microsoftonline.com", "login.live.com", "login.microsoft.com",
+                             "accounts.google.com", "oauth2.googleapis.com", "login.okta.com", "okta.com",
+                             "auth0.com", "login.yahoo.com")
                 thost = ".".join((urlsplit(self.url).hostname or "").split(".")[-2:])
                 offhost = [n for n in net if ".".join((urlsplit(n["url"]).hostname or "").split(".")[-2:]) != thost]
-                posts = [n for n in offhost if n["method"] in ("POST", "PUT") or n["type"] in ("xhr", "fetch")]
+                posts = [n for n in offhost if n["method"] in ("POST", "PUT", "PATCH") or n["type"] in ("xhr", "fetch")]
+                # authoritative: which fake values we typed actually appear in an off-host request body, and where
+                val_kind = {str(x.get("value", "")): x.get("kind") for st in self.report["steps"]
+                            for x in (st.get("filled_fields") or []) if len(str(x.get("value", ""))) >= 4}
+                cred_exfil = []
+                for n in posts:
+                    body = n.get("body") or ""
+                    hits = sorted({k for v, k in val_kind.items() if v and v in body})
+                    if hits:
+                        cred_exfil.append({"host": urlsplit(n["url"]).hostname, "url": n["url"][:160], "fields": hits})
+                # reverse-proxy relay: a lookalike page POST/xhr to a REAL auth-provider backend
+                relay = sorted({urlsplit(n["url"]).hostname for n in posts
+                                if any(b in (urlsplit(n["url"]).hostname or "") for b in _BACKENDS)})
                 self.report["network"] = {
                     "count": len(net),
                     "hosts": sorted({urlsplit(n["url"]).hostname for n in offhost if urlsplit(n["url"]).hostname})[:40],
                     "exfil": [{"method": n["method"], "url": n["url"][:200], "type": n["type"]} for n in posts][:30],
+                    "credential_exfil": cred_exfil[:10], "relay_to": relay[:10],
                 }
+                # a live relay to the real backend, CORROBORATED by a toolkit fingerprint, is strong AiTM evidence
+                aitm = (self.report.get("enrichment") or {}).get("aitm") or {}
+                if relay and any(s.get("toolkit") for s in aitm.get("signals", [])):
+                    aitm.setdefault("signals", []).append({
+                        "name": "live_backend_relay", "toolkit": None, "score": 45, "tier": "runtime",
+                        "evidence": f"page relayed credentials to the real auth backend ({relay[0]}) — reverse-proxy (AiTM)"})
+                    aitm["aitm_score"] = min(100, sum(int(s.get("score", 0)) for s in aitm["signals"]))
             except Exception:
                 self.report["network"] = {}
             self.report["verdict"] = _verdict(self.report)
