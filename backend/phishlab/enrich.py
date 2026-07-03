@@ -15,6 +15,8 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from . import aitm as A
+
 TIMEOUT = 8.0
 UA = "PhishLab/0.1 (SOC phishing analysis)"
 BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0"
@@ -159,15 +161,15 @@ async def enrich(url: str) -> dict:
     host = (urlsplit(url).hostname or "").lower()
     if not host:
         return {}
-    rdap, ipi, uh, crt, fp = await asyncio.gather(
+    rdap, ipi, uh, crt, fp, aitm_r = await asyncio.gather(
         rdap_domain(host), ip_info(host), urlhaus_check(host), crtsh_recent(host), fingerprint(url),
-        return_exceptions=True)
+        A.analyze(url), return_exceptions=True)
 
     def ok(x):
         return x if not isinstance(x, Exception) else None
 
     return {"host": host, "rdap": ok(rdap), "ip": ok(ipi), "urlhaus": ok(uh), "cert": ok(crt),
-            "fingerprint": ok(fp)}
+            "fingerprint": ok(fp), "aitm": ok(aitm_r)}
 
 
 def score_signals(enr: dict) -> list[tuple[int, str]]:
@@ -182,4 +184,5 @@ def score_signals(enr: dict) -> list[tuple[int, str]]:
             out.append((12, f"domain only {age}d old"))
     if ((enr or {}).get("urlhaus") or {}).get("listed"):
         out.append((30, "host is on the URLhaus malware/phishing blocklist"))
+    out += A.score_signals((enr or {}).get("aitm") or {})   # AiTM / reverse-proxy toolkit signals
     return out

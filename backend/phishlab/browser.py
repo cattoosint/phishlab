@@ -198,14 +198,21 @@ async def click_advance(page) -> str | None:
                 return label.strip()[:40]
         except Exception:
             continue
-    # 2) a button/link/role=button whose text reads like an advance action
+    # 2) a button/link/role=button whose text reads like an advance action (multi-language:
+    #    'continu' catches continue/continuar/continuer; + PT/ES/FR/DE variants)
     try:
         cand = await page.evaluate("""() => {
-          const rx = /continue|next|verify|sign\\s*in|log\\s*in|proceed|confirm|submit|weiter|siguiente/i;
-          const els = Array.from(document.querySelectorAll('button, a, [role=button], input[type=button]'));
+          const rx = /continu|next|verify|proceed|confirm|submit|weiter|siguiente|sign\\s*in|log\\s*in|avan[cç]ar|avanzar|pr[oó]xim|prosseguir|acessar|entrar|seguinte|suivant|valider|acc[eé]der|get\\s*started|comen[çc]ar/i;
+          const els = Array.from(document.querySelectorAll('button, a, [role=button], input[type=button], input[type=submit]'));
           for (const e of els) {
             const txt = (e.innerText || e.value || '').trim();
             if (rx.test(txt) && e.offsetParent !== null) return txt.slice(0, 40);
+          }
+          // interstitial GATE: no real form fields + a single visible button -> click it whatever it says
+          const inputs = document.querySelectorAll('input:not([type=hidden]):not([type=submit]):not([type=button]), textarea, select');
+          if (inputs.length === 0) {
+            const btns = els.filter(e => e.offsetParent !== null && (e.innerText||e.value||'').trim());
+            if (btns.length === 1) return (btns[0].innerText||btns[0].value||'').trim().slice(0, 40);
           }
           return null;
         }""")

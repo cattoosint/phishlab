@@ -29,15 +29,20 @@ BRANDS = (
 
 # Anti-bot / gate fingerprints. If the VICTIM view hits one of these, the page is gated and we
 # likely did NOT reach the real content — report it honestly rather than call the page clean.
+# STRONG interactive-challenge signals ONLY. Cloudflare injects '/cdn-cgi/challenge-platform/' JS and
+# loads challenges.cloudflare.com on EVERY site it fronts (bot management), and legit forms embed
+# recaptcha/api.js — matching those flagged ordinary pages (e.g. a FormSubmit "Thanks!" success page)
+# as gates. Match the CHALLENGE UI/text, not the CDN or the embedded script host.
 CHALLENGE_MARKERS = {
-    "cloudflare": ("just a moment", "checking your browser", "cf-browser-verification", "cf_chl",
-                   "challenge-platform", "__cf_chl"),
-    "turnstile": ("cf-turnstile", "challenges.cloudflare.com", "turnstile"),
-    "recaptcha": ("g-recaptcha", "recaptcha/api.js", "grecaptcha"),
-    "hcaptcha": ("h-captcha", "hcaptcha.com"),
-    "datadome": ("datadome", "dd_cookie"),
-    "akamai": ("ak_bmsc", "_abck", "akamai bot"),
-    "imperva": ("_incap_", "incapsula", "imperva"),
+    "cloudflare": ("just a moment", "checking your browser", "cf-browser-verification",
+                   "cf-challenge-running", "needs to review the security of your connection",
+                   "enable javascript and cookies to continue"),
+    "turnstile": ("cf-turnstile",),
+    "recaptcha": ("g-recaptcha",),
+    "hcaptcha": ("h-captcha",),
+    "datadome": ("geo.captcha-delivery.com", "datadome captcha"),
+    "akamai": ("ak_bmsc", "_abck"),
+    "imperva": ("incapsula incident", "_incap_ses"),
 }
 
 
