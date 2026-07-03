@@ -53,13 +53,27 @@ async def launch():
             await browser.close()
 
 
+# Basic anti-detection — hides the most obvious automation tells that "managed" Cloudflare/Turnstile
+# challenges key on. NOT a full stealth solution (deep TLS/JA3/HTTP-2 fingerprinting still detects
+# vanilla Playwright); for reliably passing Cloudflare use a real-fingerprint browser (Camoufox).
+_STEALTH_JS = """
+Object.defineProperty(navigator, 'webdriver', {get: () => false});
+try { Object.defineProperty(navigator, 'languages', {get: () => ['en-US','en']}); } catch (e) {}
+try { window.chrome = window.chrome || { runtime: {} }; } catch (e) {}
+"""
+
+
 async def new_victim_context(browser, *, locale="en-US", tz="America/New_York"):
-    """A convincing victim: real UA, JS on, real locale/timezone. NB: do NOT pass an explicit
-    `viewport` — invisible_playwright injects a `screenSize` alongside it that this Firefox build's
-    protocol rejects (Browser.setDefaultViewport error). The wrapper applies its own coherent
-    viewport/fingerprint anyway."""
-    return await browser.new_context(
+    """A convincing victim: real UA, JS on, real locale/timezone, + a light anti-bot patch
+    (navigator.webdriver=false). NB: do NOT pass an explicit `viewport` — invisible_playwright injects
+    a `screenSize` alongside it that this Firefox build's protocol rejects."""
+    ctx = await browser.new_context(
         java_script_enabled=True, user_agent=FIREFOX_UA, locale=locale, timezone_id=tz)
+    try:
+        await ctx.add_init_script(_STEALTH_JS)
+    except Exception:
+        pass
+    return ctx
 
 
 async def new_scanner_context(browser):
