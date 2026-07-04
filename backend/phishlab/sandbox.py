@@ -81,6 +81,10 @@ async def scanner_view(browser, url: str) -> dict:
             sc = {"reached": False, "error": "scanner did not load (timeout/blocked)"}
         else:
             sc = {"reached": True, "url": cur, "status": (r.status if r else None), "title": await spg.title()}
+            try:
+                sc["screenshot"] = await B.screenshot_b64(spg)   # SEE the decoy the bot was served
+            except Exception:
+                pass
         await sctx.close()
     except Exception as exc:
         sc["error"] = f"{type(exc).__name__}: {exc}"[:160]

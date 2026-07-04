@@ -540,6 +540,17 @@ function render(rep){
   // extra cloaking axes
   if(dc.referer) mvhtml+=`<div class="kv"><span class="k">referer-gated</span><span class="v" style="${dc.referer.gated?'color:var(--bad)':'color:var(--ok)'}">${dc.referer.gated?'YES — renders only with a webmail referer':'no'}</span></div>`;
   if(cl.interaction) mvhtml+=`<div class="kv"><span class="k">interaction-cloaking</span><span class="v" style="color:var(--bad)">YES — revealed only after mouse/scroll</span></div>`;
+  // scanner (bot) decoy vs victim (real) — SEE the two different pages cloaking serves
+  const scSt=dc.scanner||{}, vicSt=dc.victim||{};
+  const scShot=scSt.screenshot, vicShot=((rep.steps||[]).find(s=>s.screenshot)||{}).screenshot;
+  if(scShot||vicShot){
+    const cloaked=(dc.cloaked||'').startsWith('cloaked');
+    mvhtml+=`<div class="kv" style="margin-top:8px"><span class="k">scanner (bot) vs victim (you)${cloaked?' · <b style="color:var(--bad)">DIFFERENT PAGES</b>':''}</span></div>`
+      +`<div class="vviews">`
+      +`<div class="vv"><div class="vv-h"><b>scanner / bot</b><span class="vst" style="color:${scSt.reached?'var(--warn)':'var(--bad)'}">${scSt.reached?'sees this':'blocked'}</span></div>${scShot?`<img src="data:image/jpeg;base64,${scShot}" onclick="zoom(this.src)">`:`<div class="vv-none">${esc(scSt.error||'no view')}</div>`}<div class="vv-u">${esc(scSt.url||'')}</div></div>`
+      +`<div class="vv"><div class="vv-h"><b>victim / real</b><span class="vst" style="color:var(--ok)">sees this</span></div>${vicShot?`<img src="data:image/jpeg;base64,${vicShot}" onclick="zoom(this.src)">`:`<div class="vv-none">no view</div>`}<div class="vv-u">${esc(vicSt.url||'')}</div></div>`
+      +`</div>`;
+  }
   // per-vantage screenshots (captured when IP/geo cloaked) — SEE what each network was served
   const vv=dc.vantage_views||[];
   if(vv.length){
