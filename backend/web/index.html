@@ -189,7 +189,9 @@
   .live-head{display:flex;align-items:center;gap:12px;margin-bottom:9px}
   .live-head .ls{font-family:var(--mono);font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--accent)}
   .live-head .ls.hv{color:var(--warn)}
-  .live-stage{border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#000;aspect-ratio:16/9}
+  .live-stage{border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#000;aspect-ratio:16/9;position:relative}
+  .fs-toggle{position:absolute;top:9px;right:9px;z-index:6;background:rgba(0,0,0,.6);color:#fff;border:1px solid rgba(255,255,255,.28);border-radius:6px;padding:5px 11px;cursor:pointer;font-size:12px;backdrop-filter:blur(2px)}
+  .fs-toggle:hover{background:rgba(0,0,0,.85);border-color:#fff}
   .live-stage img{width:100%;height:100%;object-fit:fill;display:block;background:#000}
   .live-stage.hv{outline:2px solid var(--warn);outline-offset:-2px;cursor:default}
   /* fullscreen the live view */
@@ -241,9 +243,8 @@
       <button class="go" id="takeover" style="display:none;padding:7px 16px;background:var(--warn);color:#241a10">✋ Take over</button>
       <button class="go" id="resume" style="display:none;padding:7px 16px">▶ Resume automation</button>
       <span class="live-hint" id="lhint"></span>
-      <button id="fsbtn" title="fullscreen the live view (Esc to exit)" style="margin-left:auto;background:var(--panel2);color:var(--muted);border:1px solid var(--line);border-radius:6px;padding:6px 13px;cursor:pointer;font-size:12px;white-space:nowrap">⛶ Fullscreen</button>
     </div>
-    <div class="live-stage" id="lstage"><img id="limg" alt="" tabindex="0" draggable="false" style="user-select:none;-webkit-user-drag:none"></div>
+    <div class="live-stage" id="lstage"><img id="limg" alt="" tabindex="0" draggable="false" style="user-select:none;-webkit-user-drag:none"><button id="fsbtn" class="fs-toggle" title="Fullscreen (Esc to exit)">⛶ Fullscreen</button></div>
     <div class="console" id="lconsole" style="margin-top:12px;max-height:150px"></div>
   </div>
 
