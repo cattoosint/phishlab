@@ -192,7 +192,7 @@
   .live-stage{border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#000;aspect-ratio:16/9;position:relative}
   .fs-toggle{position:absolute;top:9px;right:9px;z-index:6;background:rgba(0,0,0,.6);color:#fff;border:1px solid rgba(255,255,255,.28);border-radius:6px;padding:5px 11px;cursor:pointer;font-size:12px;backdrop-filter:blur(2px)}
   .fs-toggle:hover{background:rgba(0,0,0,.85);border-color:#fff}
-  .live-stage img{width:100%;height:100%;object-fit:fill;display:block;background:#000}
+  .live-stage img{width:100%;height:100%;object-fit:contain;display:block;background:#000}
   .live-stage.hv{outline:2px solid var(--warn);outline-offset:-2px;cursor:default}
   /* fullscreen the live view */
   .live.fs{position:fixed;inset:0;z-index:9999;margin:0;padding:12px 16px;background:var(--bg);overflow:auto}
@@ -372,8 +372,11 @@ function _startPoll(sid){
 
 async function _send(ev){ if(_sid) try{ await fetch('/api/session/'+_sid+'/input',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(ev)}); }catch(e){} }
 const _hv=()=>_sid && $('#ls').className.indexOf('hv')>=0;   // in handover / took over
-const _fxy=(e)=>{ const r=$('#limg').getBoundingClientRect();
-  return {x:Math.max(0,Math.min(1,(e.clientX-r.left)/r.width)), y:Math.max(0,Math.min(1,(e.clientY-r.top)/r.height))}; };
+const _fxy=(e)=>{ const img=$('#limg'), r=img.getBoundingClientRect();
+  // object-fit:contain letterboxes the frame — map the click to the ACTUAL image area, not the element box
+  const nw=img.naturalWidth||16, nh=img.naturalHeight||9, sc=Math.min(r.width/nw, r.height/nh);
+  const dw=nw*sc, dh=nh*sc, ox=(r.width-dw)/2, oy=(r.height-dh)/2;
+  return {x:Math.max(0,Math.min(1,(e.clientX-r.left-ox)/dw)), y:Math.max(0,Math.min(1,(e.clientY-r.top-oy)/dh))}; };
 let _drag=false, _lastMove=0;
 $('#limg').addEventListener('mousedown',(e)=>{        // press = drag start; a quick press+release = a click
   if(!_hv()) return; e.preventDefault();               // stop the browser grabbing the <img> as a drag-image
