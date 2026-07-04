@@ -56,6 +56,11 @@
   .sc.down{color:var(--text)} .sc.down .sc-dot{background:var(--bad)}
   .sc-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .trk .cbtn{background:none;border:1px solid var(--line);border-radius:6px;color:var(--muted);font-size:11px;padding:4px 9px;cursor:pointer;margin-left:5px}
+  /* dark, professional action buttons (report in-app, mail FP, etc.) */
+  .cbtn{background:var(--panel2);border:1px solid var(--line);border-radius:6px;color:var(--muted);font-size:11px;padding:5px 11px;cursor:pointer;transition:border-color .12s,color .12s,background .12s}
+  .cbtn:hover{color:var(--text);border-color:#3a4653;background:#232b34}
+  .cbtn.rep{color:var(--accent);border-color:rgba(74,158,218,.42);font-weight:600;letter-spacing:.2px}
+  .cbtn.rep:hover{color:#fff;background:var(--accent);border-color:var(--accent)}
   .trk .cbtn:hover{color:var(--text);border-color:var(--accent)}
   .trk.taken{border-left-color:var(--bad);background:rgba(217,95,87,.06)}
   .case{margin-bottom:8px}
@@ -478,7 +483,7 @@ function render(rep){
           const inapp=['safebrowsing','microsoft'];
           rp.innerHTML=`<div class="kv"><span class="k">report the URL to</span></div>`+
             `<ul class="list">${(d.targets||[]).map(x=>{
-              const b=inapp.includes(x.key)?` <button class="cbtn" onclick="startReport('${x.key}','${esc(x.name).replace(/'/g,'')}')">report in-app ▶</button>`:'';
+              const b=inapp.includes(x.key)?` <button class="cbtn rep" onclick="startReport('${x.key}','${esc(x.name).replace(/'/g,'')}')">report in-app ▶</button>`:'';
               return `<li><a href="${esc(x.url)}" target="_blank">${esc(x.name)}</a> <span style="color:var(--faint)"> — ${esc(x.note)}</span>${b}</li>`;
             }).join('')}</ul>`+
             `<div class="empty-note" style="margin-top:8px">“report in-app” opens the form in the frame + pre-fills the URL — solve the CAPTCHA there, submit, then Resume. Links open the site.</div>`;
