@@ -68,6 +68,7 @@
   .case.open .trk{border-radius:8px 8px 0 0}
   .trk-views{border:1px solid var(--line);border-top:0;border-radius:0 0 8px 8px;padding:14px;background:var(--panel)}
   .views-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:14px}
+  .vviews{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-top:6px}
   .vv{border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--bg)}
   .vv-h{padding:8px 10px;font-size:12px;border-bottom:1px solid var(--line);display:flex;gap:8px;align-items:center}
   .vv-h .vst{font-weight:700;font-family:var(--mono);font-size:11px}
@@ -530,11 +531,20 @@ function render(rep){
   ) : `<div class="empty-note">No enrichment.</div>`;
 
   // decloak
-  const dc=rep.decloak||{}; const mv=dc.multi_vantage||{}; const vps=dc.vantages||[];
+  const dc=rep.decloak||{}; const mv=dc.multi_vantage||{}; const vps=dc.vantages||[]; const cl=rep.cloaking||{};
   let mvhtml='';
   if(vps.length){
     mvhtml = `<div class="kv"><span class="k">IP/geo cloaking</span><span class="v" style="${mv.cloaked?'color:var(--bad)':'color:var(--ok)'}">${mv.cloaked?('YES — '+esc((mv.diffs||[]).join(', '))):'no — consistent'}</span></div>`
       + `<ul class="list">${vps.map(p=>{const up=p.status&&p.status<400&&!p.reason;return `<li class="tel-row"><b>${esc(p.label)}</b> ${p.status?('· '+p.status):''} ${up?'':'<span style="color:var(--warn)">'+esc(p.reason||'down')+'</span>'} ${p.title?'· '+esc(p.title.slice(0,42)):''}</li>`;}).join('')}</ul>`;
+  }
+  // extra cloaking axes
+  if(dc.referer) mvhtml+=`<div class="kv"><span class="k">referer-gated</span><span class="v" style="${dc.referer.gated?'color:var(--bad)':'color:var(--ok)'}">${dc.referer.gated?'YES — renders only with a webmail referer':'no'}</span></div>`;
+  if(cl.interaction) mvhtml+=`<div class="kv"><span class="k">interaction-cloaking</span><span class="v" style="color:var(--bad)">YES — revealed only after mouse/scroll</span></div>`;
+  // per-vantage screenshots (captured when IP/geo cloaked) — SEE what each network was served
+  const vv=dc.vantage_views||[];
+  if(vv.length){
+    mvhtml+=`<div class="kv" style="margin-top:8px"><span class="k">what each vantage was served</span></div>`
+      + `<div class="vviews">${vv.map(v=>`<div class="vv"><div class="vv-h"><b>${esc(v.label)}</b><span class="vst" style="color:${v.up?'var(--ok)':'var(--bad)'}">${v.up?'UP':'DOWN'}</span></div>${v.screenshot?`<img src="data:image/jpeg;base64,${v.screenshot}" onclick="zoom(this.src)">`:`<div class="vv-none">no response</div>`}<div class="vv-u">${esc(v.title||v.final_url||'')}</div></div>`).join('')}</div>`;
   }
   $('#decloak').innerHTML=`
     <div class="kv"><span class="k">verdict</span><span class="v">${esc(dc.cloaked||'—')}</span></div>

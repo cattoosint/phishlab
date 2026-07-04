@@ -139,6 +139,26 @@ class Session:
         if self._task and not self._task.done():
             self._task.cancel()
 
+    async def _reveal_by_interaction(self, page):
+        """Dispatch human-like mouse/scroll/click + wait out timer-gated reveals — some kits render the
+        credential form only after real interaction (CrawlPhish user-interaction cloaking). Best-effort."""
+        try:
+            for x, y in ((180, 200), (420, 320), (640, 260), (300, 500)):
+                await page.mouse.move(x, y)
+                await page.wait_for_timeout(90)
+            await page.mouse.wheel(0, 700)
+            await page.wait_for_timeout(250)
+            await page.mouse.wheel(0, -350)
+            try:
+                await page.evaluate("() => { window.dispatchEvent(new Event('scroll'));"
+                                    " document.body && document.body.dispatchEvent("
+                                    "new MouseEvent('mousemove', {bubbles: true})); }")
+            except Exception:
+                pass
+            await page.wait_for_timeout(2500)   # sit out setTimeout-gated reveals
+        except Exception:
+            pass
+
     async def _frame_loop(self):
         while self.state not in ("done", "error", "cancelled"):
             pg = self._page
@@ -209,7 +229,9 @@ class Session:
                 self._log("Loading the page…")
                 r = None
                 try:
-                    r = await page.goto(self.url, wait_until="domcontentloaded", timeout=B.NAV_TIMEOUT)
+                    # arrive as a victim would — from their webmail — so referer-gated kits render the phish
+                    r = await page.goto(self.url, wait_until="domcontentloaded", timeout=B.NAV_TIMEOUT,
+                                        referer="https://mail.google.com/")
                 except Exception:
                     self._log("(page slow to load — continuing with whatever rendered)")
                 await page.wait_for_timeout(SETTLE_MS)
@@ -242,8 +264,20 @@ class Session:
                     if mv.get("cloaked"):
                         self.report["cloaking"]["ip_geo"] = True
                         self._log(f"  IP/geo CLOAKING likely - {', '.join(mv.get('diffs', []))}")
+                        try:                          # cloaked -> capture what EACH vantage actually saw
+                            self._log("  capturing per-vantage screenshots so you can see each view…")
+                            dc["vantage_views"] = await T.capture_views(self.url)
+                        except Exception:
+                            pass
                     else:
                         self._log(f"  consistent across {mv.get('responded', 0)} vantage(s) - no IP/geo cloaking")
+                    # referer-gated cloaking axis — some kits only render for a visitor arriving from webmail
+                    ref = await T.referer_probe(self.url)
+                    if ref:
+                        dc["referer"] = ref
+                        if ref.get("gated"):
+                            self.report["cloaking"]["referer"] = True
+                            self._log("  content differs WITH a webmail referer — referer-gated cloaking IOC.")
                 except Exception:
                     pass
 
@@ -251,6 +285,7 @@ class Session:
                 fake = _fake_identity()
                 waited: set[str] = set()      # URLs we've already sat through a 'wait' on
                 acted: set[str] = set()        # URLs we've already filled/clicked (stall guard)
+                interacted: set[str] = set()   # URLs we've already tried an interaction-reveal on
                 for step in range(MAX_STEPS):
                     if await self._checkpoint():          # analyst took over before this step
                         await page.wait_for_timeout(SETTLE_MS)
@@ -335,6 +370,16 @@ class Session:
                             pass
                         await page.wait_for_timeout(SETTLE_MS)
                         continue
+
+                    # some kits reveal the phish only AFTER human interaction — simulate it before giving up
+                    if snap["url"] not in interacted:
+                        interacted.add(snap["url"])
+                        self._log("Nothing to fill — simulating human interaction (some kits reveal on mouse/scroll)…")
+                        await self._reveal_by_interaction(page)
+                        if any(f.get("has_password") for f in await B.detect_forms(page)):
+                            self.report.setdefault("cloaking", {})["interaction"] = True
+                            self._log("  content REVEALED after interaction — interaction-cloaking IOC. Continuing…")
+                            continue
 
                     self._log("Nothing left to fill or click - stopping step-through.")
                     break

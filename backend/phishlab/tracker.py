@@ -290,6 +290,27 @@ async def vantage_probe(url: str) -> list[dict]:
     return list(await asyncio.gather(*[one(v) for v in vs]))
 
 
+async def referer_probe(url: str) -> dict | None:
+    """Referer-gated cloaking axis: compare the page served WITHOUT vs WITH a webmail Referer + real
+    Accept-Language. A kit that only renders for a visitor arriving from webmail is referer-gating."""
+    async def _get(ref):
+        headers = {"User-Agent": UA, "Accept-Language": "en-US,en;q=0.9"}
+        if ref:
+            headers["Referer"] = ref
+        try:
+            async with httpx.AsyncClient(timeout=12, follow_redirects=True, verify=False, headers=headers) as c:
+                r = await c.get(url)
+                return _content_sig(r.text or "")
+        except Exception:
+            return None
+
+    plain, withref = await asyncio.gather(_get(None), _get("https://mail.google.com/"))
+    if not plain or not withref:
+        return None
+    gated = plain["hash"] != withref["hash"] and abs(plain["len"] - withref["len"]) > 250
+    return {"gated": gated, "plain": plain, "with_referer": withref}
+
+
 def multi_vantage_verdict(probes: list[dict]) -> dict:
     """Compare what each vantage was served. Different title / final host / much-different size across
     the responding vantages = the site cloaks by IP or geo."""
