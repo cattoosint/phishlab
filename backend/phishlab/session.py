@@ -128,8 +128,19 @@ class Session:
         self.paused = False
         self._gate.set()
 
+    def cancel(self):
+        """Abort a running scan — cancel the task; the run() finally closes the browser + persists what
+        was captured so far. Idempotent; a no-op on an already-finished session."""
+        if self.state in ("done", "error", "cancelled"):
+            return
+        self.state = "cancelled"
+        self._log("Scan cancelled by the analyst.")
+        self._gate.set()                        # release any pause / checkpoint wait
+        if self._task and not self._task.done():
+            self._task.cancel()
+
     async def _frame_loop(self):
-        while self.state not in ("done", "error"):
+        while self.state not in ("done", "error", "cancelled"):
             pg = self._page
             if pg is not None:
                 try:
@@ -397,6 +408,11 @@ class Session:
             self.report["elapsed"] = round(time.time() - t0, 1)
             self.state = "done"
             self._log(f"Done - {self.report['verdict']['label']} (score {self.report['verdict']['score']}).")
+        except asyncio.CancelledError:
+            self.state = "cancelled"
+            self.report.setdefault("verdict", {"label": "cancelled", "score": 0,
+                                               "reasons": ["scan cancelled by the analyst"]})
+            self._log("Scan cancelled — stopped and browser closed.")
         except Exception as exc:
             self.report["error"] = f"{type(exc).__name__}: {exc}"[:200]
             self.state = "error"

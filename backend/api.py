@@ -236,6 +236,16 @@ async def session_resume(sid: str):
     return {"ok": True, "state": s.state}
 
 
+@app.post("/api/session/{sid}/cancel")
+async def session_cancel(sid: str):
+    s = S.get(sid)
+    if not s:
+        return JSONResponse({"error": "no such session"}, status_code=404)
+    if hasattr(s, "cancel"):
+        s.cancel()
+    return {"ok": True, "state": getattr(s, "state", "cancelled")}
+
+
 @app.get("/api/session/{sid}/report.html")
 async def session_report_html(sid: str):
     s = S.get(sid)

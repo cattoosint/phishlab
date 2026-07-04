@@ -218,6 +218,7 @@
     <div class="row">
       <input id="url" placeholder="paste the suspected phishing url…" autocomplete="off" spellcheck="false">
       <button class="go" id="go">Detonate</button>
+      <button class="go" id="cancelbtn" style="display:none;background:var(--bad)" title="stop this scan">Cancel</button>
     </div>
     <div class="hint">Drives a real browser through the page and submits <b>fake</b> credentials to any login form. Screenshots every step.</div>
   </section>
@@ -302,7 +303,7 @@ async function detonate(){
   const url = $('#url').value.trim();
   if(!url) return;
   if(_poll){ clearInterval(_poll); _poll=null; } _sid=null;   // stop any prior live session cleanly
-  $('#go').disabled=true; $('#out').className=''; clearStatus();
+  $('#go').disabled=true; $('#cancelbtn').style.display='none'; $('#out').className=''; clearStatus();
   $('#live').className='live on'; $('#lconsole').innerHTML=''; $('#limg').removeAttribute('src');
   $('#lhint').textContent='Launching browser…'; $('#ls').textContent='starting'; $('#ls').className='ls';
   $('#takeover').style.display='none'; $('#resume').style.display='none';
@@ -310,8 +311,14 @@ async function detonate(){
     const r=await fetch('/api/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})});
     const d=await r.json();
     if(!r.ok||d.error){ $('#live').className='live'; setStatus(d.error||('HTTP '+r.status),true); $('#go').disabled=false; return; }
-    _sid=d.id; _startPoll(d.id);
+    _sid=d.id; _startPoll(d.id); $('#cancelbtn').style.display='inline-block'; $('#cancelbtn').disabled=false;
   }catch(e){ $('#live').className='live'; setStatus('Could not reach the engine: '+e.message,true); $('#go').disabled=false; }
+}
+async function cancelScan(){
+  const id=_sid; if(!id) return;
+  $('#cancelbtn').disabled=true; $('#lhint').textContent='Cancelling…';
+  try{ await fetch('/api/session/'+id+'/cancel',{method:'POST'}); }catch(e){}
+  // the poll loop picks up state='cancelled' and finalizes (hides the button, re-enables Detonate)
 }
 
 function _startPoll(sid){
@@ -345,9 +352,11 @@ function _startPoll(sid){
         ? 'You have control — click, scroll, and type on the frame to solve the challenge, then Resume automation.'
         : 'Detonating live… — press Take over to drive the browser yourself.';
     }
-    if((s.state==='done'||s.state==='error')&&!done){
-      done=true; clearInterval(_poll); if(!isRep) window._doneSid=sid; _sid=null; $('#live').className='live'; $('#go').disabled=false;
-      if(s.state==='error') setStatus((isRep?'Report failed: ':'Detonation failed: ')+(rep.error||''),true);
+    if((s.state==='done'||s.state==='error'||s.state==='cancelled')&&!done){
+      done=true; clearInterval(_poll); if(!isRep&&s.state!=='cancelled') window._doneSid=sid; _sid=null;
+      $('#live').className='live'; $('#go').disabled=false; $('#cancelbtn').style.display='none';
+      if(s.state==='cancelled') setStatus('Scan cancelled — stopped before completion.');
+      else if(s.state==='error') setStatus((isRep?'Report failed: ':'Detonation failed: ')+(rep.error||''),true);
       else if(isRep) setStatus('Report submitted to '+(rep.target_name||'the service')+'.');
       else render(rep);
     }
@@ -557,6 +566,7 @@ function render(rep){
 function zoom(src){ $('#lbimg').src=src; $('#lb').className='on'; }
 $('#lb').onclick=()=>{ $('#lb').className=''; };
 $('#go').onclick=detonate;
+$('#cancelbtn').onclick=cancelScan;
 $('#url').addEventListener('keydown',e=>{ if(e.key==='Enter') detonate(); });
 
 // ── takedown tracker ──
