@@ -181,8 +181,15 @@ def _infer_toolkit(sigs: list[dict]) -> str | None:
     return max(tally, key=tally.get) if tally else None
 
 
+# Signals that IDENTIFY a real reverse-proxy/toolkit — an AiTM verdict requires at least one of these.
+# Everything else (Secure-strip, cert-CA, Go headers, TLS-timing, URL shape) is too common on legit
+# sites and only counts as CORROBORATION when a strong signal is also present.
+_STRONG = {"toolkit_header", "toolkit_cookie", "modlishka_id_cookie", "evilginx_wildcard_dns",
+           "live_backend_relay", "auth_fqdn_embed"}
+
 # ── Transport-layer probes — catch a proxy that leaks NO header/cookie tell ───────
-_FREE_CA = ("let's encrypt", "zerossl", "buypass", "google trust services")
+# NOT "google trust services" — it's a mainstream CA (Cloudflare issues from it), not a phishing tell.
+_FREE_CA = ("let's encrypt", "zerossl", "buypass")
 # Major brands that use their own / DigiCert-class CAs — never Let's Encrypt for production login.
 _MAJOR_BRAND = {
     "Microsoft": r"microsoft|office\s*365|outlook|onedrive|sharepoint",
@@ -194,9 +201,11 @@ _MAJOR_BRAND = {
 
 
 def _claimed_brand(html: str, title: str) -> str | None:
-    blob = ((title or "") + " " + (html or "")[:20000]).lower()
+    # match the impersonated brand in the TITLE only — a page that merely MENTIONS "Microsoft" in its
+    # body (a system requirement, a footer) is not impersonating it.
+    t = (title or "").lower()
     for brand, pat in _MAJOR_BRAND.items():
-        if re.search(pat, blob, re.I):
+        if re.search(pat, t, re.I):
             return brand
     return None
 
@@ -320,6 +329,11 @@ async def analyze(url: str) -> dict:
         if isinstance(res, Exception) or not res:
             continue
         sigs += res if isinstance(res, list) else [res]
+
+    # never call AiTM on weak/corroboration tells alone (Secure-strip, cert-CA, Go headers, timing, URL
+    # shape are common on legit sites) — require at least one real toolkit fingerprint to be present.
+    if not any(s.get("name") in _STRONG for s in sigs):
+        sigs = [s for s in sigs if s.get("name") in _STRONG]
 
     return {"signals": sigs, "toolkit": _infer_toolkit(sigs), "brand": brand,
             "aitm_score": min(100, sum(int(s.get("score", 0)) for s in sigs)), "cdn": cdn}

@@ -303,6 +303,21 @@ def _verdict(r: dict) -> dict:
     for sc, rs in I.score_signals(r.get("indicators") or {}):
         score += sc
         reasons.append(rs)
+    # benign down-weight: an ESTABLISHED domain with NO hard phishing evidence (Telegram / off-site POST /
+    # kit / AiTM toolkit / blocklist / cloaking) — a login form + generic source tells ("collects a
+    # password") describe EVERY login page, so don't call it phishing on soft signals alone. A young or
+    # hard-evidence phish is untouched.
+    en = r.get("enrichment") or {}
+    age = (en.get("rdap") or {}).get("age_days")
+    listed = (((en.get("urlhaus") or {}).get("listed"))
+              or (((en.get("spamhaus") or {}).get("dbl") or {}).get("listed"))
+              or ((en.get("safebrowsing") or {}).get("listed")))
+    hard = bool(r["exfil"]["telegram"] or any(s.get("off_site") for s in r["steps"])
+                or (r.get("kit") or {}).get("found") or (en.get("aitm") or {}).get("toolkit")
+                or listed or dc.startswith("cloaked"))
+    if not hard and isinstance(age, int) and age > 180 and score < 80:
+        score = min(score, 18)
+        reasons.append(f"[down-weighted: established domain ({age}d) with no exfil/kit/toolkit/blocklist evidence]")
     score = min(score, 100)
     label = ("confirmed_phishing" if score >= 80 else
              "likely_phishing" if score >= 45 else
