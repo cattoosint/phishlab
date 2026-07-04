@@ -31,7 +31,10 @@ async def gather_scripts(base_url: str, html: str, max_files: int = 10, cap: int
     srcs: list[str] = []
     for m in _SCRIPT_SRC.finditer(html or ""):
         u = urljoin(base_url, m.group(1))
-        h = (urlsplit(u).hostname or "").lower()
+        try:
+            h = (urlsplit(u).hostname or "").lower()
+        except Exception:
+            continue                          # malformed src URL in attacker HTML — skip
         if h and ".".join(h.split(".")[-2:]) == reg and u not in srcs:
             srcs.append(u)
         if len(srcs) >= max_files:

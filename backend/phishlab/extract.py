@@ -64,12 +64,21 @@ def telegram_channels(html: str) -> list[dict]:
     return [{"bot_token": t, "bot_id": t.split(":")[0], "chat_ids": chat_ids} for t in sorted(tokens)]
 
 
+def _safe_host(u: str) -> str:
+    """Hostname of a URL, or '' — never raises. Attacker HTML can carry malformed URLs (unbalanced IPv6
+    bracket -> urlsplit ValueError); one bad href must not crash the whole detonation."""
+    try:
+        return (urlsplit(u).hostname or "").lower()
+    except Exception:
+        return ""
+
+
 def off_host_urls(html: str, page_url: str) -> list[str]:
     """Absolute URLs pointing OFF the page's own host — candidate exfil/C2 endpoints."""
-    host = (urlsplit(page_url).hostname or "").lower()
+    host = _safe_host(page_url)
     out = set()
     for u in URL_RE.findall(html or ""):
-        h = (urlsplit(u).hostname or "").lower()
+        h = _safe_host(u)
         if h and h != host:
             out.add(u)
     return sorted(out)
@@ -98,9 +107,9 @@ def iocs(html: str, page_url: str, extra_urls=()) -> dict:
     """Aggregate IOCs from the page source + any extra (e.g. form-action) URLs."""
     hosts, ips, emails = set(), set(), set()
     for u in set(URL_RE.findall(html or "")) | set(extra_urls or ()):
-        h = urlsplit(u).hostname
+        h = _safe_host(u)
         if h:
-            hosts.add(h.lower())
+            hosts.add(h)
     ips.update(IPV4.findall(html or ""))
     emails.update(e.lower() for e in EMAIL.findall(html or ""))
     return {"domains": sorted(hosts), "ips": sorted(ips), "emails": sorted(emails)}
