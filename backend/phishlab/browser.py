@@ -102,11 +102,16 @@ async def new_victim_context(browser, *, locale="en-US", tz="America/New_York"):
     """A convincing victim: real UA, JS on, real locale/timezone, + a light anti-bot patch
     (navigator.webdriver=false). NB: do NOT pass an explicit `viewport` — invisible_playwright injects
     a `screenSize` alongside it that this Firefox build's protocol rejects."""
+    # ignore_https_errors: phishing sites routinely have self-signed / expired / mismatched certs — power
+    # through the Firefox cert-warning interstitial and analyse the page anyway. (aitm.cert_probe records
+    # the cert problems separately for the report.)
     if _USING_CAMOUFOX:
         # Camoufox supplies its own coherent fingerprint (UA/TLS/JA3/canvas) — don't override the UA
-        return await browser.new_context(java_script_enabled=True, locale=locale, timezone_id=tz)
+        return await browser.new_context(java_script_enabled=True, locale=locale, timezone_id=tz,
+                                         ignore_https_errors=True)
     ctx = await browser.new_context(
-        java_script_enabled=True, user_agent=FIREFOX_UA, locale=locale, timezone_id=tz)
+        java_script_enabled=True, user_agent=FIREFOX_UA, locale=locale, timezone_id=tz,
+        ignore_https_errors=True)
     try:
         await ctx.add_init_script(_STEALTH_JS)
     except Exception:
@@ -116,7 +121,8 @@ async def new_victim_context(browser, *, locale="en-US", tz="America/New_York"):
 
 async def new_scanner_context(browser):
     """A bot-like identity: crawler UA, JS off — meant to trip cloaking so we see the decoy."""
-    return await browser.new_context(java_script_enabled=False, user_agent=SCANNER_UA)
+    return await browser.new_context(java_script_enabled=False, user_agent=SCANNER_UA,
+                                     ignore_https_errors=True)
 
 
 # ── robotic form primitives ───────────────────────────────────────────────────

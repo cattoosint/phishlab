@@ -192,6 +192,10 @@
   .live-stage{border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#000;aspect-ratio:16/9}
   .live-stage img{width:100%;height:100%;object-fit:fill;display:block;background:#000}
   .live-stage.hv{outline:2px solid var(--warn);outline-offset:-2px;cursor:default}
+  /* fullscreen the live view */
+  .live.fs{position:fixed;inset:0;z-index:9999;margin:0;padding:12px 16px;background:var(--bg);overflow:auto}
+  .live.fs .live-stage{aspect-ratio:auto;height:calc(100vh - 108px)}
+  .live.fs .console{max-height:72px}
   .live-hint{font-size:12px;color:var(--muted)}
   .live-key{margin-top:10px;width:100%;background:var(--panel);border:1px solid var(--warn);border-radius:7px;
     color:var(--text);font-family:var(--mono);font-size:13px;padding:9px 11px;outline:none;display:none}
@@ -237,6 +241,7 @@
       <button class="go" id="takeover" style="display:none;padding:7px 16px;background:var(--warn);color:#241a10">✋ Take over</button>
       <button class="go" id="resume" style="display:none;padding:7px 16px">▶ Resume automation</button>
       <span class="live-hint" id="lhint"></span>
+      <button id="fsbtn" title="fullscreen the live view (Esc to exit)" style="margin-left:auto;background:var(--panel2);color:var(--muted);border:1px solid var(--line);border-radius:6px;padding:6px 13px;cursor:pointer;font-size:12px;white-space:nowrap">⛶ Fullscreen</button>
     </div>
     <div class="live-stage" id="lstage"><img id="limg" alt="" tabindex="0" draggable="false" style="user-select:none;-webkit-user-drag:none"></div>
     <div class="console" id="lconsole" style="margin-top:12px;max-height:150px"></div>
@@ -588,6 +593,8 @@ function zoom(src){ $('#lbimg').src=src; $('#lb').className='on'; }
 $('#lb').onclick=()=>{ $('#lb').className=''; };
 $('#go').onclick=detonate;
 $('#cancelbtn').onclick=cancelScan;
+$('#fsbtn').onclick=()=>{ const f=$('#live').classList.toggle('fs'); $('#fsbtn').textContent=f?'⛶ Exit fullscreen':'⛶ Fullscreen'; };
+document.addEventListener('keydown',(e)=>{ if(e.key==='Escape'&&$('#live').classList.contains('fs')){ $('#live').classList.remove('fs'); $('#fsbtn').textContent='⛶ Fullscreen'; } });
 $('#url').addEventListener('keydown',e=>{ if(e.key==='Enter') detonate(); });
 
 // ── takedown tracker ──
