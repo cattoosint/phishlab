@@ -531,7 +531,7 @@ function render(rep){
   ) : `<div class="empty-note">No enrichment.</div>`;
 
   // decloak
-  const dc=rep.decloak||{}; const mv=dc.multi_vantage||{}; const vps=dc.vantages||[]; const cl=rep.cloaking||{};
+  const dc=rep.decloak||{}; const mv=dc.multi_vantage||{}; const vps=dc.vantages||[];
   let mvhtml='';
   if(vps.length){
     mvhtml = `<div class="kv"><span class="k">IP/geo cloaking</span><span class="v" style="${mv.cloaked?'color:var(--bad)':'color:var(--ok)'}">${mv.cloaked?('YES — '+esc((mv.diffs||[]).join(', '))):'no — consistent'}</span></div>`
@@ -539,7 +539,7 @@ function render(rep){
   }
   // extra cloaking axes
   if(dc.referer) mvhtml+=`<div class="kv"><span class="k">referer-gated</span><span class="v" style="${dc.referer.gated?'color:var(--bad)':'color:var(--ok)'}">${dc.referer.gated?'YES — renders only with a webmail referer':'no'}</span></div>`;
-  if(cl.interaction) mvhtml+=`<div class="kv"><span class="k">interaction-cloaking</span><span class="v" style="color:var(--bad)">YES — revealed only after mouse/scroll</span></div>`;
+  if(ck.interaction) mvhtml+=`<div class="kv"><span class="k">interaction-cloaking</span><span class="v" style="color:var(--bad)">YES — revealed only after mouse/scroll</span></div>`;
   // scanner (bot) decoy vs victim (real) — SEE the two different pages cloaking serves
   const scSt=dc.scanner||{}, vicSt=dc.victim||{};
   const scShot=scSt.screenshot, vicShot=((rep.steps||[]).find(s=>s.screenshot)||{}).screenshot;
