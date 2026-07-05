@@ -189,15 +189,16 @@
   .live-head{display:flex;align-items:center;gap:12px;margin-bottom:9px}
   .live-head .ls{font-family:var(--mono);font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--accent)}
   .live-head .ls.hv{color:var(--warn)}
-  .live-stage{border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#000;aspect-ratio:16/9;position:relative}
+  .live-stage{border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#000;position:relative;min-height:180px}
   .fs-toggle{position:absolute;top:9px;right:9px;z-index:6;background:rgba(0,0,0,.6);color:#fff;border:1px solid rgba(255,255,255,.28);border-radius:6px;padding:5px 11px;cursor:pointer;font-size:12px;backdrop-filter:blur(2px)}
   .fs-toggle:hover{background:rgba(0,0,0,.85);border-color:#fff}
-  .live-stage img{width:100%;height:100%;object-fit:contain;display:block;background:#000}
+  .live-stage img{width:100%;height:auto;display:block;background:#000}   /* fill the width at the frame's natural aspect */
   .live-stage.hv{outline:2px solid var(--warn);outline-offset:-2px;cursor:default}
   /* fullscreen the live view — the stage fills the ENTIRE viewport; head floats, console hidden */
   .live.fs{position:fixed;inset:0;z-index:9999;margin:0;padding:0;background:#000;overflow:hidden}
   .live.fs .live-head{position:absolute;top:0;left:0;right:0;z-index:3;margin:0;padding:8px 14px;background:linear-gradient(rgba(0,0,0,.6),transparent)}
   .live.fs .live-stage{aspect-ratio:auto;width:100vw;height:100vh;border:0;border-radius:0}
+  .live.fs .live-stage img{height:100%;object-fit:contain}   /* fullscreen: fit the whole viewport */
   .live.fs .console{display:none}
   .live-hint{font-size:12px;color:var(--muted)}
   .live-key{margin-top:10px;width:100%;background:var(--panel);border:1px solid var(--warn);border-radius:7px;
