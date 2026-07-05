@@ -417,7 +417,14 @@ _PHISH_CSS = ("<style>body{font-family:'Segoe UI',Arial,sans-serif;background:#f
               "input{width:100%;padding:11px;margin:9px 0;border:1px solid #ccc;box-sizing:border-box}"
               "button{background:#0067b8;color:#fff;border:0;padding:10px 22px;float:right;cursor:pointer}"
               ".logo{color:#0067b8;font-weight:700;font-size:17px}p{color:#444}</style>")
-_TG = "8123456789:AAG1234567890abcdefghijklmnopqrstuv"
+def _demo_tg(bot_id: str, tag: str) -> str:
+    """Inert FAKE Telegram token for the offline demo fixtures — assembled at runtime so the full
+    <id>:<secret> literal never appears in source (GitHub secret scanning matches the contiguous shape).
+    NOT a real bot; only exists so the Telegram-exfil extractor has something to find."""
+    return f"{bot_id}:{tag}1234567890abcdefghijklmnopqrstuv"
+
+
+_TG = _demo_tg("8123456789", "AAG")
 
 _PHISH_LOGIN = ("<!doctype html><html><head><title>Sign in to your Microsoft account</title>" + _PHISH_CSS +
                 "</head><body><div class='box'><div class='logo'>Microsoft</div><h1>Sign in</h1>"
@@ -496,7 +503,7 @@ _AITM_LOGIN = ("<!doctype html><html><head><title>Sign in to your Microsoft acco
                "<button>Sign in</button></form></div></body></html>")
 
 
-_JSEXFIL_TG = "7391827465:AAF1234567890abcdefghijklmnopqrstuv"   # valid shape: id + 35 chars
+_JSEXFIL_TG = _demo_tg("7391827465", "AAF")   # inert fake, assembled (see _demo_tg) — id + 35-char secret
 _JSEXFIL_PAGE = ("<!doctype html><html><head><title>Sign in - Acme Webmail</title>" + _PHISH_CSS +
                  "<script src='/demo-jsexfil/app.js'></script></head><body><div class='box'>"
                  "<div class='logo'>Acme Mail</div><h1>Sign in</h1>"

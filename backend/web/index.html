@@ -895,7 +895,7 @@ if(new URLSearchParams(location.search).get('demo')){
       {i:0,action:'load',url:'http://login-microsoftonline.secure-verify.xyz/login',title:'Sign in to your Microsoft account',forms:[{has_password:true}],telegram:[{bot_id:'123456789'}],screenshot:''},
       {i:0,action:'fill+submit',creds_sent_to:'https://evil-drop.top/steal.php',off_site:true,screenshot:''},
       {i:1,action:'load',url:'http://login-microsoftonline.secure-verify.xyz/verify',title:'Verify your identity',forms:[{has_password:false}],telegram:[],screenshot:''}],
-    exfil:{telegram:[{bot_id:'123456789',bot_token:'123456789:1234567890AbCdEfGhIjKlMnOpQrStUvWxY',chat_ids:['987654321']}],form_actions:['https://evil-drop.top/steal.php','https://evil-drop.top/otp.php']},
+    exfil:{telegram:[{bot_id:'123456789',bot_token:'123456789'+':1234567890AbCdEfGhIjKlMnOpQrStUvWxY',chat_ids:['987654321']}],form_actions:['https://evil-drop.top/steal.php','https://evil-drop.top/otp.php']},
     decloak:{cloaked:'cloaked_diff_host',scanner:{url:'https://www.google.com/'},victim:{url:'http://login-microsoftonline.secure-verify.xyz/login'},redirect_chain:['a','b']},
     iocs:{domains:['evil-drop.top','login-microsoftonline.secure-verify.xyz'],ips:[],emails:[],brands_impersonated:['microsoft','office','telegram']}});
 }

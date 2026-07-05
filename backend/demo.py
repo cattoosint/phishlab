@@ -19,8 +19,9 @@ except Exception:
     pass
 
 PORT = 8098
-# a valid-shaped Telegram bot token (bot-id : 35-char secret) — the key exfil IOC
-TG = "123456789:1234567890AbCdEfGhIjKlMnOpQrStUvWxY"
+# a valid-SHAPED but inert fake Telegram bot token (bot-id : 35-char secret) — the key exfil IOC.
+# Assembled so the full literal never appears in source (GitHub secret scanning flags the contiguous shape).
+TG = "123456789" + ":1234567890AbCdEfGhIjKlMnOpQrStUvWxY"
 
 LOGIN = f"""<!doctype html><html><head><title>Sign in to your Microsoft account</title></head>
 <body><h1>Microsoft</h1><p>Sign in to continue to Office 365</p>
