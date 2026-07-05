@@ -126,6 +126,8 @@ class Session:
 
     def resume(self):
         self.paused = False
+        if self.state == "handover":          # unstick the state even if the walker wasn't blocked at a
+            self.state = "running"            # checkpoint when Take-over fired (else it stays 'handover')
         self._gate.set()
 
     def cancel(self):
@@ -633,12 +635,23 @@ class ReportSession(Session):
                     await page.goto(form_url, wait_until="domcontentloaded", timeout=B.NAV_TIMEOUT)
                 except Exception:
                     self._log("(form slow to load — continuing)")
-                await page.wait_for_timeout(2500)                     # let the Angular form render first
+                # Wait for the (Angular) form to actually RENDER, then prefill — retrying until a field
+                # fills. Camoufox renders slower than vanilla Firefox, so a fixed 2.5s wait fired before
+                # the URL field existed (MS/Google reports then auto-filled nothing).
                 try:
-                    n = await page.evaluate(_PREFILL_JS, {"url": self.url, "detail": self.detail, "reporter": REPORTER})
-                    self._log(f"Pre-filled {n} field(s) (name/email/phone + the message). Review, solve any CAPTCHA, then Submit.")
+                    await page.wait_for_selector("input:not([type=hidden]), textarea", timeout=15000)
                 except Exception:
                     pass
+                n = 0
+                for _ in range(4):
+                    await page.wait_for_timeout(1500)
+                    try:
+                        n = await page.evaluate(_PREFILL_JS, {"url": self.url, "detail": self.detail, "reporter": REPORTER})
+                    except Exception:
+                        n = 0
+                    if n:
+                        break
+                self._log(f"Pre-filled {n} field(s). Review, pick the threat type if needed, solve any CAPTCHA, then Submit.")
                 try:
                     await page.bring_to_front()
                 except Exception:

