@@ -587,11 +587,13 @@ class ReportSession(Session):
         try:
             if not spec:
                 raise ValueError(f"unknown report target {self.target}")
-            from playwright.async_api import async_playwright
-            async with async_playwright() as p:
-                browser = await p.firefox.launch(headless=False)     # a REAL window on the SOC desktop
+            # Headed Camoufox (real fingerprint) so Cloudflare Turnstile on the report form (e.g.
+            # telegram.org/support) actually verifies — vanilla Playwright Firefox gets soft-blocked
+            # ("Verifying…" forever). Falls back to a vanilla headed window if Camoufox is unavailable.
+            async with B.launch(headed=True) as browser:
                 browser.on("disconnected", lambda: self.resume())     # analyst closed the window = done
-                ctx = await browser.new_context(no_viewport=True, user_agent=B.FIREFOX_UA)
+                ua = {} if B._USING_CAMOUFOX else {"user_agent": B.FIREFOX_UA}   # Camoufox owns its own UA
+                ctx = await browser.new_context(no_viewport=True, ignore_https_errors=True, **ua)
                 page = await ctx.new_page()
                 self.state = "running"
                 form_url = spec["url"].replace("{q}", quote(self.url, safe=""))

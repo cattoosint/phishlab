@@ -30,7 +30,7 @@ _USING_CAMOUFOX = False   # set True while a Camoufox browser is active (it owns
 
 
 @asynccontextmanager
-async def launch():
+async def launch(headed: bool = False):
     """Launch Firefox once; reuse across scanner + victim contexts.
 
     Default = vanilla Playwright Firefox (reliable, standard API). Set PHISH_STEALTH=1 to use
@@ -43,13 +43,14 @@ async def launch():
     cursor) that reliably passes Cloudflare/Turnstile so the analyst can reach the actual phish. Falls
     back to vanilla if Camoufox isn't installed (pip install camoufox && python -m camoufox fetch)."""
     global _USING_CAMOUFOX
+    hl = False if headed else _HEADLESS   # report windows launch headed so the analyst can solve the CAPTCHA + submit
     if (os.getenv("PHISH_BROWSER") or "").strip().lower() == "camoufox":
         cm = browser = None
         try:
             from camoufox.async_api import AsyncCamoufox
             # a coherent real-desktop identity: Windows fingerprint, human cursor, no WebRTC IP leak,
             # + geoip (tz/locale/geo derived from the egress IP) when camoufox[geoip] is installed.
-            opts = {"headless": _HEADLESS, "humanize": True, "os": "windows", "block_webrtc": True}
+            opts = {"headless": hl, "humanize": True, "os": "windows", "block_webrtc": True}
             try:
                 import geoip2  # noqa: F401
                 opts["geoip"] = True
@@ -74,14 +75,14 @@ async def launch():
     if (os.getenv("PHISH_STEALTH") or "").strip().lower() in ("1", "true", "yes", "on"):
         try:
             from invisible_playwright.async_api import InvisiblePlaywright
-            async with InvisiblePlaywright(headless=_HEADLESS) as browser:
+            async with InvisiblePlaywright(headless=hl) as browser:
                 yield browser
                 return
         except Exception as exc:
             logger.warning("invisible_playwright unavailable (%s) — falling back to vanilla Firefox", exc)
     from playwright.async_api import async_playwright
     async with async_playwright() as p:
-        browser = await p.firefox.launch(headless=_HEADLESS)
+        browser = await p.firefox.launch(headless=hl)
         try:
             yield browser
         finally:
