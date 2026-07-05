@@ -51,5 +51,5 @@ REM Self-restart loop: an in-app GitHub update pulls new code then exits with co
 REM with the fresh code. (A clean restart — NOT uvicorn --reload, which on Windows breaks Playwright's
 REM browser subprocess with NotImplementedError.)
 :runserver
-python -m uvicorn api:app --app-dir backend --host 0.0.0.0 --port %PORT%
+python run_server.py
 if errorlevel 42 if not errorlevel 43 (echo. & echo === Applying update - relaunching PhishLab === & echo. & goto runserver)

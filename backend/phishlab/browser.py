@@ -26,7 +26,15 @@ FIREFOX_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101
 # A crawler UA for the SCANNER identity — meant to look like a bot so the kit serves its decoy.
 SCANNER_UA = "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
 
-_USING_CAMOUFOX = False   # set True while a Camoufox browser is active (it owns its own fingerprint)
+# Which live browsers are Camoufox (they own their own coherent UA/fingerprint, so contexts must NOT
+# override the UA). Tracked PER BROWSER by id() — a module global would be stomped when a concurrent
+# report/detonation launch()s or exits, corrupting an in-flight run's fingerprint.
+_CAMOUFOX_IDS: set[int] = set()
+
+
+def is_camoufox(browser) -> bool:
+    """True if this browser instance is Camoufox (don't override its UA in contexts)."""
+    return id(browser) in _CAMOUFOX_IDS
 
 
 @asynccontextmanager
@@ -42,7 +50,6 @@ async def launch(headed: bool = False):
     Set PHISH_BROWSER=camoufox to use Camoufox — a real-fingerprint Firefox (spoofed TLS/JA3, humanized
     cursor) that reliably passes Cloudflare/Turnstile so the analyst can reach the actual phish. Falls
     back to vanilla if Camoufox isn't installed (pip install camoufox && python -m camoufox fetch)."""
-    global _USING_CAMOUFOX
     hl = False if headed else _HEADLESS   # report windows launch headed so the analyst can solve the CAPTCHA + submit
     if (os.getenv("PHISH_BROWSER") or "").strip().lower() == "camoufox":
         cm = browser = None
@@ -62,11 +69,11 @@ async def launch(headed: bool = False):
             cm = None
             logger.warning("Camoufox unavailable (%s) — falling back to vanilla Firefox", exc)
         if cm is not None:
-            _USING_CAMOUFOX = True
+            _CAMOUFOX_IDS.add(id(browser))
             try:
                 yield browser                     # caller errors propagate correctly (not swallowed -> no athrow)
             finally:
-                _USING_CAMOUFOX = False
+                _CAMOUFOX_IDS.discard(id(browser))
                 try:
                     await cm.__aexit__(None, None, None)
                 except Exception:
@@ -106,7 +113,7 @@ async def new_victim_context(browser, *, locale="en-US", tz="America/New_York"):
     # ignore_https_errors: phishing sites routinely have self-signed / expired / mismatched certs — power
     # through the Firefox cert-warning interstitial and analyse the page anyway. (aitm.cert_probe records
     # the cert problems separately for the report.)
-    if _USING_CAMOUFOX:
+    if is_camoufox(browser):
         # Camoufox supplies its own coherent fingerprint (UA/TLS/JA3/canvas) — don't override the UA
         return await browser.new_context(java_script_enabled=True, locale=locale, timezone_id=tz,
                                          ignore_https_errors=True)
@@ -131,7 +138,7 @@ _FORMS_JS = """() => Array.from(document.forms).map(f => {
   const els = Array.from(f.elements).filter(e => e.name || e.type);
   const blob = e => ((e.name||'')+' '+(e.id||'')+' '+(e.placeholder||'')+' '+(e.getAttribute('aria-label')||'')+' '+(e.autocomplete||'')).toLowerCase();
   const type = e => (e.type||'').toLowerCase();
-  const hasPw    = els.some(e => type(e)==='password');
+  const hasPw    = els.some(e => type(e)==='password' || /passw|pwd/.test((e.name||'')+' '+(e.id||'')));  // match fill_fields' password test
   const hasEmail = els.some(e => type(e)==='email' || /email|e-mail/.test(blob(e)));
   const hasPhone = els.some(e => type(e)==='tel'   || /phone|mobile/.test(blob(e)));
   const hasName  = els.some(e => /first ?name|last ?name|full ?name|fname|lname|your name/.test(blob(e)));
@@ -150,15 +157,23 @@ _FORMS_JS = """() => Array.from(document.forms).map(f => {
 
 # 'log in / sign in' links on the page — used to hunt for the REAL credential login when the current
 # page only shows a lead-capture / marketing form (First/Last name, Phone, Email — no password).
-_FIND_LOGIN_JS = """() => {
-  const RE = /log ?in|sign ?in|log-in|sign-in|member ?login|customer ?login|account ?login|my ?account|client ?portal|member ?area/i;
+_FIND_LOGIN_JS = r"""() => {
+  // Match login LINKS by anchor text/aria (word-bounded, so 'catalog-info' doesn't match 'log-in') or by
+  // a login PATH SEGMENT (so '/login' matches but '/mycatalog' doesn't). Avoids the substring false
+  // positives that would send the walker off to an unrelated page.
+  const TXT  = /\b(log ?in|sign ?in|log-in|sign-in|member login|customer login|account login|my account|client portal|member area|sign on)\b/i;
+  const PATH = /(^|[\/._-])(login|signin|log-in|sign-in|logon|logins|account|portal|auth|members?)([\/._-]|$)/i;
   const cur = location.href.replace(/#.*$/, '');
   const seen = new Set(); const out = [];
   for (const a of document.querySelectorAll('a[href]')) {
     const href = (a.href || '').replace(/#.*$/, '');
     if (!href || href === cur || href.indexOf('javascript:') === 0 || href.indexOf('mailto:') === 0) continue;
-    const hay = ((a.textContent||'') + ' ' + (a.getAttribute('href')||'') + ' ' + (a.getAttribute('aria-label')||'')).slice(0, 160);
-    if (RE.test(hay) && !seen.has(href)) { seen.add(href); out.push({text: (a.textContent||'').trim().slice(0,60), href}); }
+    const txt = (a.textContent || '').trim();
+    const aria = a.getAttribute('aria-label') || '';
+    let path = href; try { path = new URL(href).pathname; } catch (e) {}
+    if ((TXT.test(txt) || TXT.test(aria) || PATH.test(path)) && !seen.has(href)) {
+      seen.add(href); out.push({ text: txt.slice(0, 60), href });
+    }
   }
   return out.slice(0, 6);
 }"""

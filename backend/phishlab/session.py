@@ -45,7 +45,7 @@ def _evict() -> None:
     """Bound RAM: drop the oldest done/error sessions from memory (their report is on disk)."""
     if len(SESSIONS) <= SESSION_CAP:
         return
-    done = sorted((s for s in SESSIONS.values() if s.state in ("done", "error")),
+    done = sorted((s for s in SESSIONS.values() if s.state in ("done", "error", "cancelled")),
                   key=lambda s: (s.report.get("started_at") or 0))
     for s in done[:len(SESSIONS) - SESSION_CAP]:
         SESSIONS.pop(s.id, None)
@@ -286,6 +286,7 @@ class Session:
                 waited: set[str] = set()      # URLs we've already sat through a 'wait' on
                 acted: set[str] = set()        # URLs we've already filled/clicked (stall guard)
                 interacted: set[str] = set()   # URLs we've already tried an interaction-reveal on
+                login_hunted: set[str] = set() # URLs where we've already followed a 'log in' link
                 for step in range(MAX_STEPS):
                     if await self._checkpoint():          # analyst took over before this step
                         await page.wait_for_timeout(SETTLE_MS)
@@ -337,6 +338,30 @@ class Session:
                     if await self._checkpoint():          # analyst took over before we fill
                         await page.wait_for_timeout(SETTLE_MS)
                         continue
+
+                    # LOGIN vs LEAD-CAPTURE: a form with no password but name+email/phone is a marketing
+                    # lead-capture, NOT a credential login. Hunt for the REAL login page before filling it.
+                    has_cred = any(f.get("has_password") for f in forms)
+                    if (not has_cred and any(f.get("kind") == "lead_capture" for f in forms)
+                            and snap["url"] not in login_hunted and len(login_hunted) < 2):
+                        login_hunted.add(snap["url"])
+                        links = await B.find_login_link(page)
+                        if links:
+                            tgt = links[0]["href"]
+                            self._log(f"Step {step}: lead-capture form (name/email/phone, no password) — not a "
+                                      f"login. Following the real login page: '{links[0].get('text') or tgt}'")
+                            self.report["steps"].append({
+                                "i": step, "action": "seek_login", "url": snap["url"], "to": tgt,
+                                "note": f"lead-capture form here; followed a login link to {tgt}"})
+                            try:
+                                await page.goto(tgt, wait_until="domcontentloaded", timeout=B.NAV_TIMEOUT)
+                                await page.wait_for_timeout(SETTLE_MS)
+                                continue
+                            except Exception:
+                                self._log("  couldn't open that login link — treating the lead form as the target.")
+                        else:
+                            self._log(f"Step {step}: lead-capture form only, no login page linked — looks like "
+                                      f"a lead/marketing funnel, not a credential phish.")
 
                     # fill ANY field the page asks for (password, email, phone, OTP/code, text) with FAKE data
                     filled = await B.fill_fields(page, fake)
@@ -597,7 +622,7 @@ class ReportSession(Session):
             # ("Verifying…" forever). Falls back to a vanilla headed window if Camoufox is unavailable.
             async with B.launch(headed=True) as browser:
                 browser.on("disconnected", lambda: self.resume())     # analyst closed the window = done
-                ua = {} if B._USING_CAMOUFOX else {"user_agent": B.FIREFOX_UA}   # Camoufox owns its own UA
+                ua = {} if B.is_camoufox(browser) else {"user_agent": B.FIREFOX_UA}   # Camoufox owns its own UA
                 ctx = await browser.new_context(no_viewport=True, ignore_https_errors=True, **ua)
                 page = await ctx.new_page()
                 self.state = "running"

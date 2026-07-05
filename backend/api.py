@@ -23,7 +23,7 @@ from base64 import b64encode
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
@@ -113,23 +113,35 @@ async def version() -> dict:
     return {"v": v}
 
 
+def _cross_origin(request: Request) -> bool:
+    """True for a CROSS-ORIGIN browser request — a drive-by CSRF vector. A malicious page's fetch() to
+    127.0.0.1 sends Sec-Fetch-Site: cross-site/same-site; the GUI sends same-origin; non-browser callers
+    (curl) send nothing. Block only the cross-origin browser case so state-changing update endpoints can't
+    be triggered by a tab the analyst happens to have open."""
+    return (request.headers.get("sec-fetch-site") or "").lower() in ("cross-site", "same-site")
+
+
 @app.get("/api/update/check")
 async def update_check() -> dict:
     """Is a newer PhishLab commit available on GitHub? Drives the 'update available' badge."""
-    return U.check()
+    return await asyncio.to_thread(U.check)      # git ls-remote is blocking — keep it off the event loop
 
 
 @app.post("/api/update/apply")
-async def update_apply() -> dict:
+async def update_apply(request: Request):
     """Pull the latest from GitHub (fast-forward only). If backend code changed, the GUI then calls
     /api/update/restart to relaunch with the new code."""
-    return U.apply()
+    if _cross_origin(request):
+        return JSONResponse({"error": "cross-origin request blocked"}, status_code=403)
+    return await asyncio.to_thread(U.apply)      # git fetch/pull is blocking (up to ~180s) — off-loop
 
 
 @app.post("/api/update/restart")
-async def update_restart() -> dict:
+async def update_restart(request: Request):
     """Cleanly restart the engine so a pulled backend update takes effect. Exits with code 42 a moment
     AFTER this response is sent; PhishLab.bat's loop relaunches on 42 (installs without a manual restart)."""
+    if _cross_origin(request):
+        return JSONResponse({"error": "cross-origin request blocked"}, status_code=403)
     import threading
     import time
 

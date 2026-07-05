@@ -315,6 +315,10 @@
 <script>
 const $ = s => document.querySelector(s);
 const esc = s => (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+// JS-string-safe: for values interpolated into an inline onclick="fn('...')" built from UNTRUSTED data
+// (e.g. a bot token scraped from a hostile kit). Strips quotes/backslash/newlines/angle-brackets so the
+// value can't break out of the string and execute. esc() alone does NOT escape the single quote.
+const jsq = s => (s==null?'':String(s)).replace(/['"`\\\r\n<>]/g,'');
 const host = u => { try { return new URL(u).host; } catch { return ''; } };
 
 function setStatus(msg, err){ const s=$('#status'); s.className='status on'+(err?' err':''); $('#statusmsg').textContent=msg; s.querySelector('.bar').style.display='none'; }
@@ -421,7 +425,13 @@ async function rehydrate(){
   try{
     const r=await fetch('/api/session/'+sid); if(!r.ok){ sessionStorage.removeItem('pl_sid'); return; }
     const s=await r.json(); const rep=s.report||{};
-    if(rep.kind==='report'){ return; }                     // headed report sessions don't restore a frame
+    if(rep.kind==='report'){
+      // a still-live report -> resume polling so the native copy-panel / hint re-renders after the reload
+      if(s.state==='running'||s.state==='handover'){
+        _sid=sid; $('#live').className='live on'; $('#go').disabled=true; window._hasFrame=s.has_frame; _startPoll(sid);
+      }
+      return;                                              // finished/headed reports don't restore a frame
+    }
     if(s.state==='done'){ window._doneSid=sid; render(rep); }
     else if(s.state==='running'||s.state==='handover'){     // reconnect to the live run + resume polling
       _sid=sid; $('#live').className='live on'; $('#go').disabled=true; window._hasFrame=s.has_frame;
@@ -534,8 +544,8 @@ function render(rep){
     ? `${tels.length?`<div style="margin-bottom:8px"><div class="kv"><span class="k">Telegram exfil</span></div>
         <ul class="list">${tels.map(t=>{
           const cids=(t.chat_ids||[]).join(', ');
-          const botBtn=`<button class="cbtn rep" onclick="reportTelegram('bot','${esc(t.bot_id)}','${esc(t.bot_token)}','')">report bot to Telegram ▶</button>`;
-          const chatBtn=cids?`<button class="cbtn rep" onclick="reportTelegram('chat','${esc(t.bot_id)}','','${esc(cids)}')">report chat to Telegram ▶</button>`:'';
+          const botBtn=`<button class="cbtn rep" onclick="reportTelegram('bot','${jsq(t.bot_id)}','${jsq(t.bot_token)}','')">report bot to Telegram ▶</button>`;
+          const chatBtn=cids?`<button class="cbtn rep" onclick="reportTelegram('chat','${jsq(t.bot_id)}','','${jsq(cids)}')">report chat to Telegram ▶</button>`:'';
           return `<li class="tel-row">bot ${esc(t.bot_id)} · <span style="color:var(--muted)">${esc(t.bot_token)}</span>${cids?` · chat ${esc(cids)}`:''}<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">${botBtn}${chatBtn}</div></li>`;
         }).join('')}</ul></div>`:''}
        ${posted.length?`<div class="kv"><span class="k">fake creds submitted to</span></div><ul class="list">${posted.map(a=>`<li class="tel-row">${esc(a)}</li>`).join('')}</ul>`:''}`
@@ -895,9 +905,14 @@ async function applyUpdate(){
   }catch(e){ b.textContent='Restarting…'; _waitHealthReload(); }   // dropped connection = the reload itself
 }
 function _waitHealthReload(){
-  let n=0; const iv=setInterval(async()=>{ n++;
-    try{ const r=await fetch('/api/health',{cache:'no-store'}); if(r.ok){ clearInterval(iv); location.reload(); return; } }catch(_){}
-    if(n>45){ clearInterval(iv); location.reload(); }            // fall back after ~45s
+  // wait for the engine to actually go DOWN (restarting) then come back UP, so we don't reload against
+  // the still-dying old process (which would reload into the pre-update version or a dead page).
+  let n=0, sawDown=false;
+  const iv=setInterval(async()=>{ n++;
+    let up=false; try{ up=(await fetch('/api/health',{cache:'no-store'})).ok; }catch(_){ up=false; }
+    if(!up){ sawDown=true; }
+    else if(sawDown){ clearInterval(iv); location.reload(); return; }   // back up after a restart -> reload
+    if(n>60){ clearInterval(iv); location.reload(); }                    // fallback ~60s
   },1000);
 }
 setInterval(checkUpdate, 60000); checkUpdate();
