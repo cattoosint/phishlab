@@ -38,6 +38,10 @@
   .app{display:flex;min-height:100vh}
   .sidebar{width:210px;flex-shrink:0;border-right:1px solid var(--line);padding:22px 14px;display:flex;flex-direction:column;gap:3px;position:sticky;top:0;height:100vh}
   .sb-brand{font-weight:700;font-size:19px} .sb-brand b{color:var(--accent)}
+  .upd-badge{margin:14px 0 4px;width:100%;background:linear-gradient(135deg,#2563eb,#1d4ed8);color:#fff;border:0;border-radius:7px;padding:9px 12px;font-size:13px;font-weight:600;cursor:pointer;box-shadow:0 2px 10px rgba(37,99,235,.4);animation:updpulse 2.2s ease-in-out infinite}
+  .upd-badge:hover{filter:brightness(1.12)}
+  .upd-badge:disabled{opacity:.75;cursor:default;animation:none}
+  @keyframes updpulse{0%,100%{box-shadow:0 2px 10px rgba(37,99,235,.35)}50%{box-shadow:0 2px 20px rgba(37,99,235,.75)}}
   .sb-tag{color:var(--muted);font-size:11px;margin-bottom:20px}
   .navi{text-align:left;background:none;border:0;border-radius:7px;color:var(--muted);font-family:var(--ui);font-size:13.5px;padding:10px 12px;cursor:pointer}
   .navi:hover{color:var(--text);background:var(--panel)}
@@ -217,6 +221,8 @@
     <button class="navi on" data-v="analyze" onclick="switchView('analyze')">Analyze</button>
     <button class="navi" data-v="tracker" onclick="switchView('tracker')">Cases &amp; tracker</button>
     <div class="sb-cases" id="sb-cases"></div>
+    <button id="updbtn" class="upd-badge" style="display:none" onclick="applyUpdate()"
+            title="Pull the latest PhishLab from GitHub and hot-reload">⬆ Update available</button>
     <div class="sb-foot"><span class="dot" id="hdot" title="engine"></span> run on the isolated host</div>
   </aside>
   <main class="main"><div class="wrap">
@@ -320,7 +326,8 @@ async function detonate(){
     const r=await fetch('/api/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})});
     const d=await r.json();
     if(!r.ok||d.error){ $('#live').className='live'; setStatus(d.error||('HTTP '+r.status),true); $('#go').disabled=false; return; }
-    _sid=d.id; _startPoll(d.id); $('#cancelbtn').style.display='inline-block'; $('#cancelbtn').disabled=false;
+    _sid=d.id; sessionStorage.setItem('pl_sid',d.id); window._doneSid=null;   // persist so a reload restores the view
+    _startPoll(d.id); $('#cancelbtn').style.display='inline-block'; $('#cancelbtn').disabled=false;
   }catch(e){ $('#live').className='live'; setStatus('Could not reach the engine: '+e.message,true); $('#go').disabled=false; }
 }
 async function cancelScan(){
@@ -370,6 +377,22 @@ function _startPoll(sid){
       else render(rep);
     }
   },500);
+}
+
+// Restore the detonation view after a page reload (auto-reload on update, or an accidental refresh).
+// The engine keeps finished sessions in memory + on disk, so we can reconnect by the stored session id.
+async function rehydrate(){
+  const sid=sessionStorage.getItem('pl_sid'); if(!sid) return;
+  try{
+    const r=await fetch('/api/session/'+sid); if(!r.ok){ sessionStorage.removeItem('pl_sid'); return; }
+    const s=await r.json(); const rep=s.report||{};
+    if(rep.kind==='report'){ return; }                     // headed report sessions don't restore a frame
+    if(s.state==='done'){ window._doneSid=sid; render(rep); }
+    else if(s.state==='running'||s.state==='handover'){     // reconnect to the live run + resume polling
+      _sid=sid; $('#live').className='live on'; $('#go').disabled=true; window._hasFrame=s.has_frame;
+      $('#cancelbtn').style.display='inline-block'; $('#cancelbtn').disabled=false; _startPoll(sid);
+    }
+  }catch(e){}
 }
 
 async function _send(ev){ if(_sid) try{ await fetch('/api/session/'+_sid+'/input',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(ev)}); }catch(e){} }
@@ -772,6 +795,7 @@ async function rmTrk(u,btn){ const c=btn&&btn.closest('.case'); if(c) c.remove()
   try{ await fetch('/api/tracker?url='+u,{method:'DELETE'}); }catch(e){} loadTracker(true); }
 $('#trk-refresh').addEventListener('click',()=>loadTracker(true));
 loadTracker();   // live refresh handled by _tick()
+rehydrate();     // restore an in-flight/last detonation after a reload (auto-update or accidental refresh)
 
 // ── in-app takedown reporting (opens the report form in the live frame, hand off for CAPTCHA) ──
 async function startReport(key,name){
@@ -813,11 +837,43 @@ async function reportTelegram(kind, botId, botToken, chatIds){
 // health dot
 fetch('/api/health').then(r=>r.ok?null:Promise.reject()).catch(()=>{ $('#hdot').style.background='var(--bad)'; });
 
+// ── in-app self-update from GitHub ───────────────────────────────────────────────────────────────
+async function checkUpdate(){
+  try{
+    const d=await (await fetch('/api/update/check',{cache:'no-store'})).json();
+    const b=$('#updbtn'); if(!b) return;
+    if(d && d.configured && d.behind){ b.style.display='block'; if(!b.disabled) b.textContent='⬆ Update available'; }
+    else{ b.style.display='none'; }
+  }catch(e){}
+}
+async function applyUpdate(){
+  const b=$('#updbtn'); b.disabled=true; b.textContent='Updating…';
+  try{
+    const d=await (await fetch('/api/update/apply',{method:'POST'})).json();
+    if(!d.ok){ b.disabled=false; b.textContent='⬆ Update available';
+               setStatus('Update failed — '+(d.output||'pull error (local changes on this host?)'),true); return; }
+    if(!d.updated){ b.disabled=false; b.style.display='none'; setStatus('Already up to date.'); return; }
+    if(d.backend_changed){ b.textContent='Restarting…';
+      setStatus('Update pulled — restarting the engine…'); _waitHealthReload(); }
+    else{ setStatus('Update pulled — reloading…'); setTimeout(()=>location.reload(),800); }
+  }catch(e){ b.textContent='Restarting…'; _waitHealthReload(); }   // dropped connection = the reload itself
+}
+function _waitHealthReload(){
+  let n=0; const iv=setInterval(async()=>{ n++;
+    try{ const r=await fetch('/api/health',{cache:'no-store'}); if(r.ok){ clearInterval(iv); location.reload(); return; } }catch(_){}
+    if(n>45){ clearInterval(iv); location.reload(); }            // fall back after ~45s
+  },1000);
+}
+setInterval(checkUpdate, 60000); checkUpdate();
+
 // ── real-time loop (every 5s): auto-reload the page when the UI changes; live-refresh visible data ──
 let _ver=null;
 async function _tick(){
   try{ const d=await (await fetch('/api/version')).json();
-    if(_ver && d.v && d.v!==_ver){ location.reload(); return; }   // UI updated -> reload itself, no hard-refresh
+    if(_ver && d.v && d.v!==_ver){
+      if(_sid) return;                                          // detonation live -> defer reload (don't yank the view); _ver stays stale so we reload once idle
+      location.reload(); return;                                // UI updated -> reload itself, no hard-refresh
+    }
     _ver=d.v;
   }catch(e){}
   try{

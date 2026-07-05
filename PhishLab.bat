@@ -47,4 +47,5 @@ echo.
 REM open the console locally a moment after the server starts (skip when auto-started on boot)
 if not defined PHISH_NO_BROWSER start "" cmd /c "timeout /t 3 >nul & start "" http://127.0.0.1:%PORT%/"
 REM bind all interfaces so the LAN can reach it; the Host-guard limits callers to localhost + private IPs
-python -m uvicorn api:app --app-dir backend --host 0.0.0.0 --port %PORT%
+REM --reload watches backend/ so an in-app GitHub update (git pull) HOT-RELOADS the engine, no manual restart
+python -m uvicorn api:app --app-dir backend --host 0.0.0.0 --port %PORT% --reload --reload-dir backend

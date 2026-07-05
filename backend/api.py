@@ -45,6 +45,7 @@ from phishlab import net_guard as G      # noqa: E402
 from phishlab import report as R         # noqa: E402
 from phishlab import session as S        # noqa: E402
 from phishlab import tracker as T        # noqa: E402
+from phishlab import updater as U        # noqa: E402
 from phishlab.kit import ART_DIR         # noqa: E402
 from phishlab.sandbox import detonate    # noqa: E402
 
@@ -101,6 +102,18 @@ async def version() -> dict:
     except Exception:
         v = "0"
     return {"v": v}
+
+
+@app.get("/api/update/check")
+async def update_check() -> dict:
+    """Is a newer PhishLab commit available on GitHub? Drives the 'update available' badge."""
+    return U.check()
+
+
+@app.post("/api/update/apply")
+async def update_apply() -> dict:
+    """Pull the latest from GitHub (fast-forward only). Under uvicorn --reload the app hot-reloads."""
+    return U.apply()
 
 
 @app.get("/api/artifact")
