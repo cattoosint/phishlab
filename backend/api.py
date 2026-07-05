@@ -163,7 +163,11 @@ async def open_native(req: OpenReq, request: Request):
     http/https only; cross-origin-guarded so a stray tab can't pop browser windows."""
     if _cross_origin(request):
         return JSONResponse({"error": "cross-origin request blocked"}, status_code=403)
-    url = _norm_url(req.url or "")
+    raw = (req.url or "").strip()
+    m = re.match(r"^([a-zA-Z][\w+.-]*):", raw)                # explicit scheme? reject file:/javascript:/etc.
+    if m and m.group(1).lower() not in ("http", "https"):
+        return JSONResponse({"error": "only http/https URLs can be opened"}, status_code=400)
+    url = _norm_url(raw)
     if not (url.startswith("http://") or url.startswith("https://")):
         return JSONResponse({"error": "only http/https URLs can be opened"}, status_code=400)
     try:
