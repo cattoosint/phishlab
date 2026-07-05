@@ -275,6 +275,7 @@ async def session_targets(sid: str):
 class ReportReq(BaseModel):
     url: str
     target: str
+    detail: str | None = None      # pre-filled report message (e.g. the Telegram bot/chat evidence)
 
 
 @app.post("/api/report")
@@ -283,7 +284,7 @@ async def report_start(req: ReportReq):
     url = _norm_url(req.url)
     if req.target not in S.REPORT_FORMS:
         return JSONResponse({"error": "unknown report target"}, status_code=400)
-    s = S.create_report(url, req.target)
+    s = S.create_report(url, req.target, (req.detail or "").strip()[:1500] or None)
     return {"id": s.id, "state": s.state, "target": req.target}
 
 

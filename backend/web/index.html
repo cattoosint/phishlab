@@ -302,7 +302,7 @@ const $ = s => document.querySelector(s);
 const esc = s => (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const host = u => { try { return new URL(u).host; } catch { return ''; } };
 
-function setStatus(msg, err){ const s=$('#status'); s.className='status on'+(err?' err':''); $('#statusmsg').textContent=msg; if(err) s.querySelector('.bar').style.display='none'; }
+function setStatus(msg, err){ const s=$('#status'); s.className='status on'+(err?' err':''); $('#statusmsg').textContent=msg; s.querySelector('.bar').style.display='none'; }
 function clearStatus(){ $('#status').className='status'; }
 
 let _poll=null, _sid=null;
@@ -464,10 +464,16 @@ function render(rep){
 
   // exfil
   const ex=rep.exfil||{}; const tels=ex.telegram||[];
+  window._curUrl=rep.url||window._curUrl;      // used by the Telegram abuse-report buttons below
   const posted=[...new Set((rep.steps||[]).filter(s=>s.action==='fill+submit').map(s=>s.creds_sent_to).filter(Boolean))];
   $('#exfil').innerHTML = (tels.length||posted.length)
     ? `${tels.length?`<div style="margin-bottom:8px"><div class="kv"><span class="k">Telegram exfil</span></div>
-        <ul class="list">${tels.map(t=>`<li class="tel-row">bot ${esc(t.bot_id)} · <span style="color:var(--muted)">${esc(t.bot_token)}</span>${(t.chat_ids||[]).length?` · chat ${esc((t.chat_ids||[]).join(', '))}`:''}</li>`).join('')}</ul></div>`:''}
+        <ul class="list">${tels.map(t=>{
+          const cids=(t.chat_ids||[]).join(', ');
+          const botBtn=`<button class="cbtn rep" onclick="reportTelegram('bot','${esc(t.bot_id)}','${esc(t.bot_token)}','')">report bot to Telegram ▶</button>`;
+          const chatBtn=cids?`<button class="cbtn rep" onclick="reportTelegram('chat','${esc(t.bot_id)}','','${esc(cids)}')">report chat to Telegram ▶</button>`:'';
+          return `<li class="tel-row">bot ${esc(t.bot_id)} · <span style="color:var(--muted)">${esc(t.bot_token)}</span>${cids?` · chat ${esc(cids)}`:''}<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">${botBtn}${chatBtn}</div></li>`;
+        }).join('')}</ul></div>`:''}
        ${posted.length?`<div class="kv"><span class="k">fake creds submitted to</span></div><ul class="list">${posted.map(a=>`<li class="tel-row">${esc(a)}</li>`).join('')}</ul>`:''}`
     : `<div class="empty-note">No credentials submitted; no exfil channel captured.</div>`;
 
@@ -772,6 +778,30 @@ async function startReport(key,name){
     await fetch('/api/report',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url,target:key})});
     setStatus('Report window opened on your desktop for '+name+' — complete + submit there, then close that window. (Your analysis here stays open.)');
   }catch(e){ setStatus('Could not open the report window.',true); }
+}
+
+// Report a Telegram exfil BOT or CHAT to Telegram abuse (telegram.org/support), pre-filled with the
+// SOC Team identity + the evidence found on the phishing site. Bot and chat are reported separately.
+async function reportTelegram(kind, botId, botToken, chatIds){
+  const site=window._curUrl||'the analysed phishing site';
+  let detail;
+  if(kind==='chat'){
+    detail=`Reporting a Telegram CHAT/CHANNEL used for phishing credential theft.\n\n`+
+      `The following chat id was found on the phishing site ${site}: chat ${chatIds}`+(botId?` (received via bot id ${botId})`:'')+`.\n\n`+
+      `This chat is collecting stolen login credentials from victims. Please investigate and take it down.\n\n— SOC Team`;
+  } else {
+    detail=`Reporting a Telegram BOT used for phishing credential theft.\n\n`+
+      `The following id/bot was found on the phishing site ${site}: bot ${botId} : ${botToken}\n\n`+
+      `This bot is exfiltrating stolen login credentials from victims. Please investigate and terminate it.\n\n— SOC Team`;
+  }
+  const btn=(window.event&&window.event.target)||null;
+  if(btn){ const o=btn.textContent; btn.disabled=true; btn.textContent='window opened ↗';
+           setTimeout(()=>{btn.disabled=false;btn.textContent=o;},4000); }
+  try{
+    await fetch('/api/report',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({url:site,target:'telegram',detail})});
+    setStatus('Telegram abuse-report window opened on your desktop — review the pre-filled form (name/email/phone + evidence), solve any CAPTCHA, submit, then close it.');
+  }catch(e){ setStatus('Could not open the Telegram report window.',true); }
 }
 
 // health dot

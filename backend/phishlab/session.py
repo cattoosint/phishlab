@@ -529,7 +529,13 @@ REPORT_FORMS = {
                      "url": "https://safebrowsing.google.com/safebrowsing/report_phish/?url={q}"},
     "microsoft": {"name": "Microsoft SmartScreen",
                   "url": "https://www.microsoft.com/en-us/wdsi/support/report-unsafe-site-guest"},
+    "telegram": {"name": "Telegram Abuse", "url": "https://telegram.org/support"},
 }
+
+# analyst identity used to pre-fill abuse-report forms (Telegram etc.) — env-overridable
+REPORTER = {"name": os.getenv("PHISH_REPORTER_NAME", "SOC Team"),
+            "email": os.getenv("PHISH_REPORTER_EMAIL", "SOC@example.com"),
+            "phone": os.getenv("PHISH_REPORTER_PHONE", "")}
 
 _PREFILL_JS = """(cfg) => {
   let n = 0;
@@ -538,9 +544,15 @@ _PREFILL_JS = """(cfg) => {
     const t = (e.type || '').toLowerCase();
     if (e.disabled || e.readOnly || ['hidden','submit','button','checkbox','radio','file'].includes(t)) continue;
     const s = ((e.name||'')+' '+(e.id||'')+' '+(e.placeholder||'')+' '+(e.getAttribute('aria-label')||'')).toLowerCase();
-    if ((t === 'url' || t === 'text' || t === '') && /url|website|link|address|\\bsite\\b|domain/.test(s)) {
+    if (cfg.reporter && (t === 'email' || /e-?mail/.test(s)) && !e.value) {
+      fire(e, cfg.reporter.email);
+    } else if (cfg.reporter && (t === 'tel' || /phone|mobile|\\btel\\b|contact number/.test(s)) && !e.value) {
+      fire(e, cfg.reporter.phone);
+    } else if (cfg.reporter && /(full |your )?name/.test(s) && !/user|login|company|site/.test(s) && !e.value) {
+      fire(e, cfg.reporter.name);
+    } else if ((t === 'url' || t === 'text' || t === '') && /url|website|link|address|\\bsite\\b|domain/.test(s)) {
       if (!e.value) fire(e, cfg.url);
-    } else if (e.tagName === 'TEXTAREA' || /detail|description|comment|message|additional|\\binfo\\b/.test(s)) {
+    } else if (e.tagName === 'TEXTAREA' || /detail|description|comment|message|additional|\\binfo\\b|issue|problem/.test(s)) {
       if (!e.value) fire(e, cfg.detail);
     }
   }
@@ -562,9 +574,10 @@ class ReportSession(Session):
     """Drives a takedown report FORM in the live frame: opens it, pre-fills the phishing URL, then
     hands to the analyst to pick 'phishing', solve the CAPTCHA, and submit (reuses takeover)."""
 
-    def __init__(self, url: str, target: str):
+    def __init__(self, url: str, target: str, detail: str | None = None):
         super().__init__(url)
         self.target = target
+        self.detail = detail or "Phishing website"
         spec = REPORT_FORMS.get(target) or {}
         self.report = {"url": url, "target": target, "target_name": spec.get("name", target),
                        "narration": [], "kind": "report"}
@@ -590,8 +603,8 @@ class ReportSession(Session):
                     self._log("(form slow to load — continuing)")
                 await page.wait_for_timeout(2500)                     # let the Angular form render first
                 try:
-                    n = await page.evaluate(_PREFILL_JS, {"url": self.url, "detail": "Phishing website"})
-                    self._log(f"Pre-filled {n} field(s) (URL + details). Adjust the threat type/category if needed.")
+                    n = await page.evaluate(_PREFILL_JS, {"url": self.url, "detail": self.detail, "reporter": REPORTER})
+                    self._log(f"Pre-filled {n} field(s) (name/email/phone + the message). Review, solve any CAPTCHA, then Submit.")
                 except Exception:
                     pass
                 try:
@@ -614,8 +627,8 @@ class ReportSession(Session):
             self._page = None
 
 
-def create_report(url: str, target: str) -> "ReportSession":
-    s = ReportSession(url, target)
+def create_report(url: str, target: str, detail: str | None = None) -> "ReportSession":
+    s = ReportSession(url, target, detail)
     SESSIONS[s.id] = s
     s._task = asyncio.create_task(s.run())
     return s
