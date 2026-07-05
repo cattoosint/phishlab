@@ -529,7 +529,9 @@ REPORT_FORMS = {
                      "url": "https://safebrowsing.google.com/safebrowsing/report_phish/?url={q}"},
     "microsoft": {"name": "Microsoft SmartScreen",
                   "url": "https://www.microsoft.com/en-us/wdsi/support/report-unsafe-site-guest"},
-    "telegram": {"name": "Telegram Abuse", "url": "https://telegram.org/support"},
+    # native=True: open in the analyst's REAL default browser (Cloudflare Turnstile only verifies in a
+    # genuine browser — an automated window, even Camoufox, gets an unsolvable checkbox).
+    "telegram": {"name": "Telegram Abuse", "url": "https://telegram.org/support", "native": True},
 }
 
 # analyst identity used to pre-fill abuse-report forms (Telegram etc.) — env-overridable
@@ -587,6 +589,9 @@ class ReportSession(Session):
         try:
             if not spec:
                 raise ValueError(f"unknown report target {self.target}")
+            if spec.get("native"):
+                await self._run_native(spec)
+                return
             # Headed Camoufox (real fingerprint) so Cloudflare Turnstile on the report form (e.g.
             # telegram.org/support) actually verifies — vanilla Playwright Firefox gets soft-blocked
             # ("Verifying…" forever). Falls back to a vanilla headed window if Camoufox is unavailable.
@@ -627,6 +632,47 @@ class ReportSession(Session):
             self.state = "error"
         finally:
             self._page = None
+
+    async def _run_native(self, spec):
+        """Turnstile-gated forms (Telegram): open in the analyst's REAL default browser — Cloudflare's
+        'confirm you are human' check only verifies in a genuine browser, never in an automated window
+        (Camoufox included). Put the report message on the clipboard so the big field is one paste."""
+        import subprocess
+        form_url = spec["url"].replace("{q}", quote(self.url, safe=""))
+        r = REPORTER
+        self.state = "running"
+        # expose the fields so the report card can show copy-ready values
+        self.report["native_report"] = {"url": form_url, "message": self.detail,
+                                         "name": r["name"], "email": r["email"], "phone": r["phone"]}
+        copied = False
+        try:
+            subprocess.run(["clip"], input=self.detail, text=True, timeout=5)   # -> clipboard (paste the message)
+            copied = True
+        except Exception:
+            pass
+        opened = False
+        try:
+            os.startfile(form_url)                     # Windows: the analyst's DEFAULT browser
+            opened = True
+        except Exception:
+            try:
+                import webbrowser
+                opened = webbrowser.open(form_url)
+            except Exception:
+                pass
+        if opened:
+            self._log(f"Opened {spec['name']} in your DEFAULT browser — the Cloudflare check is solvable "
+                      f"there (an automated window's checkbox never verifies).")
+        else:
+            self._log(f"Open {form_url} in your browser to file the {spec['name']} report.")
+        if copied:
+            self._log("✓ Report message copied to your clipboard — paste it into the 'describe your problem' box.")
+        self._log(f"Fill:  Name = {r['name']}   ·   Email = {r['email']}   ·   Phone = {r['phone']}")
+        self._log("Then tick 'Confirm you are human' + Submit. Click '✓ Done — I submitted' here when finished.")
+        self._pause()                                  # report card shows the fields + a Done button
+        await self._checkpoint()                       # blocks until the analyst clicks Done
+        self._log(f"{spec['name']}: marked submitted.")
+        self.state = "done"
 
 
 def create_report(url: str, target: str, detail: str | None = None) -> "ReportSession":
