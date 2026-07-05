@@ -417,6 +417,36 @@ async def demo_phish(page: str = ""):
     return HTMLResponse(_PHISH_PAGES.get(page.strip("/"), _PHISH_LOGIN))
 
 
+# Detonate http://127.0.0.1:8090/demo-lead/ — a marketing/lead-capture funnel (First/Last/Phone/Email,
+# NO password) that links to a SEPARATE real credential login. Tests the walker's login-vs-lead-capture
+# detection: it should classify the lead form, skip it, follow 'Member Login', and fill the real login.
+_LEAD_LANDING = ("<!doctype html><html><head><title>Free Crypto Masterclass — CryptoKnight</title>" + _PHISH_CSS +
+                 "</head><body><div class='box'><div class='logo'>CryptoKnight</div>"
+                 "<h1>Exclusive Show-Up Bonus</h1><p>Register for the free 2-hour masterclass.</p>"
+                 "<form method='POST' action='/demo-lead/thanks'>"
+                 "<input type='text' name='fname' placeholder='First Name' required>"
+                 "<input type='text' name='lname' placeholder='Last Name' required>"
+                 "<input type='tel' name='phone' placeholder='Phone' required>"
+                 "<input type='email' name='email' placeholder='Email' required>"
+                 "<button type='submit'>Register now</button></form>"
+                 "<p style='margin-top:18px;font-size:13px'>Already a member? "
+                 "<a href='/demo-lead/login'>Member Login</a></p></div></body></html>")
+_LEAD_LOGIN = ("<!doctype html><html><head><title>Member Login — CryptoKnight</title>" + _PHISH_CSS +
+               "</head><body><div class='box'><div class='logo'>CryptoKnight</div><h1>Member Login</h1>"
+               "<form method='POST' action='/demo-lead/dashboard'>"
+               "<input type='email' name='email' placeholder='Email' required>"
+               "<input type='password' name='password' placeholder='Password' required>"
+               "<button type='submit'>Log in</button></form></div></body></html>")
+_LEAD_PAGES = {"": _LEAD_LANDING, "login": _LEAD_LOGIN,
+               "thanks": "<!doctype html><h1>Thanks — see you there!</h1>",
+               "dashboard": "<!doctype html><h1>Dashboard</h1>"}
+
+
+@app.api_route("/demo-lead/{page:path}", methods=["GET", "POST"])
+async def demo_lead(page: str = ""):
+    return HTMLResponse(_LEAD_PAGES.get(page.strip("/"), _LEAD_LANDING))
+
+
 # ── built-in AiTM/reverse-proxy MOCK (safe) to test aitm.py end-to-end ────────────────────────────
 # Reproduces only the OBSERVABLE fingerprints of Evilginx/Modlishka (headers + cookies) — it does NOT
 # proxy anything, capture credentials, or make any outside connection. Detonate:

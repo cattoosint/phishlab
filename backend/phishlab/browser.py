@@ -126,13 +126,50 @@ async def new_scanner_context(browser):
 
 
 # ── robotic form primitives ───────────────────────────────────────────────────
-_FORMS_JS = """() => Array.from(document.forms).map(f => ({
-  action: f.action || location.href,
-  method: (f.method || 'get').toLowerCase(),
-  fields: Array.from(f.elements).filter(e => e.name || e.type)
-             .map(e => ({name: e.name || '', type: (e.type || '').toLowerCase(), id: e.id || ''})),
-  has_password: Array.from(f.elements).some(e => (e.type || '').toLowerCase() === 'password'),
-}))"""
+_FORMS_JS = """() => Array.from(document.forms).map(f => {
+  const els = Array.from(f.elements).filter(e => e.name || e.type);
+  const blob = e => ((e.name||'')+' '+(e.id||'')+' '+(e.placeholder||'')+' '+(e.getAttribute('aria-label')||'')+' '+(e.autocomplete||'')).toLowerCase();
+  const type = e => (e.type||'').toLowerCase();
+  const hasPw    = els.some(e => type(e)==='password');
+  const hasEmail = els.some(e => type(e)==='email' || /email|e-mail/.test(blob(e)));
+  const hasPhone = els.some(e => type(e)==='tel'   || /phone|mobile/.test(blob(e)));
+  const hasName  = els.some(e => /first ?name|last ?name|full ?name|fname|lname|your name/.test(blob(e)));
+  // credential login = has a password; lead-capture = name + contact but NO password (marketing/signup)
+  let kind = 'other';
+  if (hasPw) kind = 'credential';
+  else if (hasName && (hasEmail || hasPhone)) kind = 'lead_capture';
+  else if (hasEmail || hasPhone) kind = 'contact';
+  return {
+    action: f.action || location.href,
+    method: (f.method || 'get').toLowerCase(),
+    fields: els.map(e => ({name: e.name || '', type: type(e), id: e.id || ''})),
+    has_password: hasPw, kind: kind,
+  };
+})"""
+
+# 'log in / sign in' links on the page — used to hunt for the REAL credential login when the current
+# page only shows a lead-capture / marketing form (First/Last name, Phone, Email — no password).
+_FIND_LOGIN_JS = """() => {
+  const RE = /log ?in|sign ?in|log-in|sign-in|member ?login|customer ?login|account ?login|my ?account|client ?portal|member ?area/i;
+  const cur = location.href.replace(/#.*$/, '');
+  const seen = new Set(); const out = [];
+  for (const a of document.querySelectorAll('a[href]')) {
+    const href = (a.href || '').replace(/#.*$/, '');
+    if (!href || href === cur || href.indexOf('javascript:') === 0 || href.indexOf('mailto:') === 0) continue;
+    const hay = ((a.textContent||'') + ' ' + (a.getAttribute('href')||'') + ' ' + (a.getAttribute('aria-label')||'')).slice(0, 160);
+    if (RE.test(hay) && !seen.has(href)) { seen.add(href); out.push({text: (a.textContent||'').trim().slice(0,60), href}); }
+  }
+  return out.slice(0, 6);
+}"""
+
+
+async def find_login_link(page) -> list[dict]:
+    """Login/sign-in links on the page (matched by anchor text/href/aria-label). Used to reach the REAL
+    credential login when the page only shows a lead-capture form. Returns [] on any error."""
+    try:
+        return await page.evaluate(_FIND_LOGIN_JS)
+    except Exception:
+        return []
 
 _FILL_JS = """(cred) => {
   const filled = {password: false, user: false, extra: 0};

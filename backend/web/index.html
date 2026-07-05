@@ -450,14 +450,20 @@ function render(rep){
         <div class="u" style="line-height:1.7">${entered}</div>
         <div class="u">→ <b>${esc(s.creds_sent_to||'—')}</b></div>
         <div class="flags"><span class="flag hz">fake data entered</span>${off}</div>`;
+    }else if(s.action==='seek_login'){
+      right=`<div class="n">step ${s.i} · seeking real login</div>
+        <div class="act">Lead-capture form (name/email/phone, no password) — not a credential login. Following the real login page.</div>
+        <div class="u">→ <b>${esc(s.to||'')}</b></div>
+        <div class="flags"><span class="flag">lead-capture bypassed</span></div>`;
     }else{
       const tel=(s.telegram||[]).length?`<span class="flag tel">telegram bot ${esc((s.telegram[0]||{}).bot_id||'')}</span>`:'';
       const fc=(s.forms||[]).length?`<span class="flag">${s.forms.length} form(s)</span>`:'';
       const pw=(s.forms||[]).some(f=>f.has_password)?'<span class="flag hz">credential form</span>':'';
+      const lc=(s.forms||[]).some(f=>f.kind==='lead_capture')?'<span class="flag">lead-capture form</span>':'';
       right=`<div class="n">step ${s.i} · load</div>
         <div class="act">${esc(s.title||'(no title)')}</div>
         <div class="u">${esc(s.url||'')}</div>
-        <div class="flags">${fc}${pw}${tel}</div>`;
+        <div class="flags">${fc}${pw}${lc}${tel}</div>`;
     }
     const div=document.createElement('div'); div.className='step'; div.innerHTML=shot+`<div>${right}</div>`; tl.appendChild(div);
   });

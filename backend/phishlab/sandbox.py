@@ -154,6 +154,7 @@ async def detonate(url: str, *, max_steps: int = MAX_STEPS) -> dict:
         fake = _fake_identity()
         acted: set[str] = set()
         waited: set[str] = set()
+        login_hunted: set[str] = set()   # pages where we've already followed a 'log in' link
         try:
             for step in range(max_steps):
                 snap = await _snapshot(page)
@@ -198,6 +199,31 @@ async def detonate(url: str, *, max_steps: int = MAX_STEPS) -> dict:
                             log(f"  clicked '{btn}'")
                     await page.wait_for_timeout(SETTLE_MS)
                     continue
+
+                # LOGIN vs LEAD-CAPTURE: a form with no password but name+email/phone is a lead-capture /
+                # marketing signup (image #44), NOT a credential login. Before spending a step filling it,
+                # hunt for the REAL login page (a 'log in / sign in' link). Bounded to avoid link loops.
+                has_cred = any(f.get("has_password") for f in forms)
+                lead = [f for f in forms if f.get("kind") == "lead_capture"]
+                if (not has_cred and lead and snap["url"] not in login_hunted and len(login_hunted) < 2):
+                    login_hunted.add(snap["url"])
+                    links = await B.find_login_link(page)
+                    if links:
+                        tgt = links[0]["href"]
+                        log(f"Step {step}: lead-capture form (name/email/phone, no password) — not a login. "
+                            f"Following the real login page: '{links[0].get('text') or tgt}'")
+                        report["steps"].append({
+                            "i": step, "action": "seek_login", "url": snap["url"], "to": tgt,
+                            "note": f"lead-capture form here; followed a login link to {tgt}"})
+                        try:
+                            await page.goto(tgt, wait_until="domcontentloaded", timeout=B.NAV_TIMEOUT)
+                            await page.wait_for_timeout(SETTLE_MS)
+                            continue
+                        except Exception:
+                            log("  couldn't open that login link — treating the lead form as the target.")
+                    else:
+                        log(f"Step {step}: lead-capture form only, no login page linked — looks like a "
+                            f"lead/marketing funnel, not a credential phish.")
 
                 # fill ANY field the page asks for (email/password/OTP/text) with FAKE data, then advance
                 filled = await B.fill_fields(page, fake)
