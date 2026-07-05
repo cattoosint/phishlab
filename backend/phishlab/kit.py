@@ -29,6 +29,9 @@ TIMEOUT = 6.0
 MAX_PROBES = 60
 MAX_TEXT = 300_000
 MAX_SAVE = 25 * 1024 * 1024
+MAX_DIR_FILES = 80      # total files pulled while walking exposed open directories (bounded)
+MAX_DIR_DEPTH = 3       # how deep to follow subdirectories inside an open-directory listing
+HREF = re.compile(r'<a\s[^>]*href\s*=\s*["\']?([^"\'>\s]+)', re.I)
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0"
 
 ART_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "artifacts")
@@ -79,6 +82,33 @@ def _candidates(url: str) -> list[str]:
             seen.add(u)
             uniq.append(u)
     return uniq[:MAX_PROBES]
+
+
+def _dir_entries(listing_url: str, html: str) -> list[str]:
+    """Absolute, same-host URLs of the files/subdirs an open-directory listing links to. Skips parent /
+    sort / off-host links, so we only fetch what the server has ALREADY enumerated as public."""
+    sp = urlsplit(listing_url)
+    base = f"{sp.scheme}://{sp.netloc}"
+    dirp = sp.path if sp.path.endswith("/") else sp.path.rsplit("/", 1)[0] + "/"
+    cur = (base + sp.path).split("#")[0].split("?")[0].rstrip("/")
+    out = []
+    for href in HREF.findall(html or ""):
+        h = (href or "").strip()
+        if not h or h[0] in "?#" or h.lower().startswith(("mailto:", "javascript:")) or h in ("../", "..", "./", "/"):
+            continue
+        if h.startswith("http://") or h.startswith("https://"):
+            if (urlsplit(h).hostname or "") != (sp.hostname or ""):    # same host only — never crawl off-host
+                continue
+            au = h
+        elif h.startswith("/"):
+            au = base + h
+        else:
+            au = base + dirp + h
+        au = au.split("#")[0].split("?")[0]                            # drop Apache sort links (?C=N;O=D)
+        if au.rstrip("/") == cur:                                      # the listing itself / parent
+            continue
+        out.append(au)
+    return list(dict.fromkeys(out))
 
 
 async def _fetch(client, url):
@@ -151,61 +181,82 @@ async def extract_kit(url: str) -> dict:
     host = sp.hostname or "host"
     cands = _candidates(url)
     case_dir = os.path.join(ART_DIR, f"{re.sub(r'[^A-Za-z0-9.-]', '_', host)}_{int(time.time())}")
-    saved_any = False
-
-    try:
-        async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=False, verify=False) as client:
-            # soft-404 baseline: a path that CANNOT exist. If the server 200s it (SPA/catch-all),
-            # we record its body fingerprint so we can reject every look-alike "hit".
-            bl = await _fetch(client, f"{base}/__phishlab_{int(time.time())}_nope__.xyz")
-            base_hash = (hashlib.md5(bl.content[:8000]).hexdigest()
-                         if (bl is not None and bl.status_code == 200) else None)
-            resps = await asyncio.gather(*[_fetch(client, u) for u in cands])
-    except Exception:
-        return {"found": False}
 
     open_dirs, archives, sources, cred_logs, texts = [], [], [], [], []
     arch_tg, arch_emails, arch_victims = [], set(), set()
-    for u, r in zip(cands, resps):
+    saved_any = False
+    base_hash = None
+    walked = 0
+
+    def _ingest(u, r):
+        """Classify one fetched response into the result lists. Returns the listing HTML if it is an
+        OPEN DIRECTORY (so the caller can recurse into its entries), else None."""
+        nonlocal saved_any
         if r is None or r.status_code != 200:
-            continue
+            return None
         body = r.content or b""
         ctype = (r.headers.get("content-type") or "").lower()
-        # reject the catch-all / soft-404 (same body the server serves for any bogus path)
-        if base_hash and hashlib.md5(body[:8000]).hexdigest() == base_hash:
-            continue
+        if base_hash and hashlib.md5(body[:8000]).hexdigest() == base_hash:   # catch-all / soft-404
+            return None
         fname = u.rsplit("/", 1)[-1].lower()
-
         if _is_archive(body, ctype):
-            path = _save(case_dir, u, body)
-            saved_any = saved_any or bool(path)
+            path = _save(case_dir, u, body); saved_any = saved_any or bool(path)
             ana = _analyze_archive(body) if body[:2] == b"PK" else {}
             archives.append({"url": u, "size": len(body), "saved": path, "contents": ana.get("files", [])})
             for t in ana.get("telegram", []):
                 if t not in arch_tg:
                     arch_tg.append(t)
-            arch_emails.update(ana.get("emails", []))
-            arch_victims.update(ana.get("victims", []))
-            continue
-
+            arch_emails.update(ana.get("emails", [])); arch_victims.update(ana.get("victims", []))
+            return None
         try:
             text = body[:MAX_TEXT].decode("utf-8", "ignore")
         except Exception:
             text = ""
         cred_lines = CRED_LINE.findall(text)
-        if cred_lines and (fname in CRED_LOGS or fname.endswith((".txt", ".log"))):
+        if cred_lines and (fname in CRED_LOGS or fname.endswith((".txt", ".log", ".csv"))):
             victims = sorted(set(EMAIL.findall(" ".join(cred_lines))))
-            path = _save(case_dir, u, body)
-            saved_any = saved_any or bool(path)
+            path = _save(case_dir, u, body); saved_any = saved_any or bool(path)
             cred_logs.append({"url": u, "count": len(cred_lines), "victims": victims[:100], "saved": path})
         elif DIRLIST.search(text):
-            open_dirs.append({"url": u})
-            texts.append(text)
+            if not any(d["url"] == u for d in open_dirs):
+                open_dirs.append({"url": u}); texts.append(text)
+            return text                                          # open directory -> recurse into its entries
         elif u != url and any(m in text for m in SRC_MARKERS):   # actual kit CODE, not the app page
-            path = _save(case_dir, u, body)
-            saved_any = saved_any or bool(path)
-            sources.append({"url": u, "size": len(body), "saved": path})
-            texts.append(text)
+            path = _save(case_dir, u, body); saved_any = saved_any or bool(path)
+            sources.append({"url": u, "size": len(body), "saved": path}); texts.append(text)
+        return None
+
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=False, verify=False) as client:
+            # soft-404 baseline: a path that CANNOT exist. If the server 200s it (SPA/catch-all), record
+            # its body fingerprint so we reject every look-alike "hit".
+            bl = await _fetch(client, f"{base}/__phishlab_{int(time.time())}_nope__.xyz")
+            base_hash = (hashlib.md5(bl.content[:8000]).hexdigest()
+                         if (bl is not None and bl.status_code == 200) else None)
+            resps = await asyncio.gather(*[_fetch(client, u) for u in cands])
+            dir_queue = []
+            for u, r in zip(cands, resps):
+                listing = _ingest(u, r)
+                if listing is not None:
+                    dir_queue.append((u, listing, 0))
+
+            # OPEN-DIRECTORY RECURSION: an exposed 'Index of /' enumerates the kit's REAL files (incl.
+            # non-standard names the fixed probes miss). Fetch ONLY the listed entries (already public),
+            # same-host, bounded by MAX_DIR_FILES / MAX_DIR_DEPTH. Not a brute-force crawl.
+            seen = set(cands)
+            while dir_queue and walked < MAX_DIR_FILES:
+                durl, dhtml, depth = dir_queue.pop(0)
+                entries = [e for e in _dir_entries(durl, dhtml) if e not in seen][:MAX_DIR_FILES - walked]
+                seen.update(entries)
+                rs = await asyncio.gather(*[_fetch(client, e) for e in entries])
+                walked += len(entries)
+                for e, r in zip(entries, rs):
+                    listing = _ingest(e, r)
+                    if listing is not None and depth + 1 < MAX_DIR_DEPTH:
+                        dir_queue.append((e, listing, depth + 1))
+    except Exception:
+        if not (archives or open_dirs or sources or cred_logs):
+            return {"found": False}
 
     blob = "\n".join(texts)
     tg = X.telegram_channels(blob)
@@ -224,6 +275,7 @@ async def extract_kit(url: str) -> dict:
         "cred_logs": cred_logs[:5], "telegram": tg, "emails": emails[:30],
         "exfil_hosts": exfil_hosts[:20], "authors": authors[:8],
         "saved_to": case_dir if saved_any else None,
+        "walked_files": walked,          # files pulled by walking exposed open directories
     }
 
 

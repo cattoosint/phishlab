@@ -728,7 +728,10 @@ async function openIntake(sid){
       if(s.report && s.report.verdict) render(s.report);
       document.getElementById('out').scrollIntoView({behavior:'smooth',block:'start'});
     } else {
-      if(_poll){clearInterval(_poll);_poll=null;} _sid=sid; window._repSid=null;
+      if(_poll){clearInterval(_poll);_poll=null;} _sid=sid; window._repSid=null; window._doneSid=null;
+      sessionStorage.setItem('pl_sid',sid);                       // survive a reload
+      $('#out').className=''; renderNative(null); $('#lstage').style.display='';   // clear the PRIOR run's report + copy-panel
+      $('#go').disabled=true; $('#cancelbtn').style.display='inline-block'; $('#cancelbtn').disabled=false;
       $('#live').className='live on'; $('#lconsole').innerHTML=''; $('#limg').removeAttribute('src');
       _startPoll(sid);
       document.getElementById('live').scrollIntoView({behavior:'smooth',block:'start'});

