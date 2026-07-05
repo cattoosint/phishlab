@@ -6,6 +6,15 @@ it only on the dedicated detonation host.
 """
 from __future__ import annotations
 
+import asyncio
+import sys
+
+# Windows + Playwright: the browser launches as a subprocess, which the default SelectorEventLoop cannot
+# spawn (-> NotImplementedError, detonations fail with 0 steps). Force the Proactor loop at import time,
+# before uvicorn builds its event loop, so browser launches work under the server just like asyncio.run().
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
 import hashlib
 import ipaddress
 import os
@@ -112,8 +121,24 @@ async def update_check() -> dict:
 
 @app.post("/api/update/apply")
 async def update_apply() -> dict:
-    """Pull the latest from GitHub (fast-forward only). Under uvicorn --reload the app hot-reloads."""
+    """Pull the latest from GitHub (fast-forward only). If backend code changed, the GUI then calls
+    /api/update/restart to relaunch with the new code."""
     return U.apply()
+
+
+@app.post("/api/update/restart")
+async def update_restart() -> dict:
+    """Cleanly restart the engine so a pulled backend update takes effect. Exits with code 42 a moment
+    AFTER this response is sent; PhishLab.bat's loop relaunches on 42 (installs without a manual restart)."""
+    import threading
+    import time
+
+    def _bye():
+        time.sleep(0.8)          # let this response flush + any in-flight frame settle
+        os._exit(42)             # hard exit with the 'relaunch me' code the .bat loop watches for
+
+    threading.Thread(target=_bye, daemon=True).start()
+    return {"restarting": True}
 
 
 @app.get("/api/artifact")

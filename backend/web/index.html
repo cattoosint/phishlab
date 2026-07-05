@@ -853,8 +853,9 @@ async function applyUpdate(){
     if(!d.ok){ b.disabled=false; b.textContent='⬆ Update available';
                setStatus('Update failed — '+(d.output||'pull error (local changes on this host?)'),true); return; }
     if(!d.updated){ b.disabled=false; b.style.display='none'; setStatus('Already up to date.'); return; }
-    if(d.backend_changed){ b.textContent='Restarting…';
-      setStatus('Update pulled — restarting the engine…'); _waitHealthReload(); }
+    if(d.backend_changed){ b.textContent='Restarting…'; setStatus('Update pulled — restarting the engine…');
+      try{ await fetch('/api/update/restart',{method:'POST'}); }catch(_){}   // engine exits 42 -> .bat relaunches
+      _waitHealthReload(); }
     else{ setStatus('Update pulled — reloading…'); setTimeout(()=>location.reload(),800); }
   }catch(e){ b.textContent='Restarting…'; _waitHealthReload(); }   // dropped connection = the reload itself
 }

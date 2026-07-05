@@ -1,9 +1,10 @@
 """phishlab/updater.py — in-app self-update from the GitHub repo.
 
-Compares the local git HEAD against origin and (on request) fast-forwards to it. With uvicorn --reload
-watching backend/, a successful pull HOT-RELOADS the running app — no manual restart. A PUBLIC repo needs
-no auth: git ls-remote / pull do the work (no GitHub API token). All calls are non-fatal — if there's no
-git checkout or no remote yet, they report that instead of raising.
+Compares the local git HEAD against origin and (on request) fast-forwards to it. A successful pull of
+backend code is applied by a clean self-restart (the app exits 42 and PhishLab.bat relaunches) — NOT
+uvicorn --reload, which on Windows breaks Playwright's browser subprocess. A PUBLIC repo needs no auth:
+git ls-remote / pull do the work (no GitHub API token). All calls are non-fatal — if there's no git
+checkout or no remote yet, they report that instead of raising.
 """
 from __future__ import annotations
 
@@ -47,7 +48,8 @@ def check() -> dict:
 
 def apply() -> dict:
     """Fast-forward the working tree to origin/<branch>. ff-only NEVER clobbers local commits/changes —
-    it fails safely and says so. Under uvicorn --reload a backend change hot-reloads the app."""
+    it fails safely and says so. backend_changed tells the GUI whether to trigger a restart (via
+    /api/update/restart -> exit 42 -> PhishLab.bat relaunches) or just refresh the page (web-only)."""
     try:
         if not _has_origin():
             return {"ok": False, "output": "no GitHub remote configured yet"}
