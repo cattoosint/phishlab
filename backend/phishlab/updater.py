@@ -40,7 +40,14 @@ def check() -> dict:
         remote = ((ls.stdout or "").split() or [""])[0]
         if not remote:
             return {"configured": True, "behind": False, "reason": f"branch {branch} not on origin"}
-        return {"configured": True, "behind": local != remote,
+        # local != remote could mean we're BEHIND (origin has new commits) OR just AHEAD (unpushed local
+        # commits). Only 'behind' should light the update badge: if the remote commit is already an
+        # ancestor of HEAD we're ahead, not behind.
+        behind = local != remote
+        if behind and _git("cat-file", "-e", remote).returncode == 0 \
+                and _git("merge-base", "--is-ancestor", remote, "HEAD").returncode == 0:
+            behind = False
+        return {"configured": True, "behind": behind,
                 "current": local[:7], "latest": remote[:7], "branch": branch}
     except Exception as exc:
         return {"configured": False, "reason": f"{type(exc).__name__}: {exc}"[:140]}

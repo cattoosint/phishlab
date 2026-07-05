@@ -196,6 +196,14 @@
   .live-stage{border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#000;position:relative;min-height:180px}
   .fs-toggle{position:absolute;top:9px;right:9px;z-index:6;background:rgba(0,0,0,.6);color:#fff;border:1px solid rgba(255,255,255,.28);border-radius:6px;padding:5px 11px;cursor:pointer;font-size:12px;backdrop-filter:blur(2px)}
   .fs-toggle:hover{background:rgba(0,0,0,.85);border-color:#fff}
+  #nativefields{border:1px solid var(--line);border-radius:8px;padding:14px 16px;background:var(--panel)}
+  .nf-title{font-size:13px;font-weight:600;margin-bottom:10px;color:var(--text)}
+  .nf-row{display:flex;align-items:flex-start;gap:10px;padding:7px 0;border-top:1px solid var(--line)}
+  .nf-row:first-of-type{border-top:0}
+  .nf-label{flex:0 0 64px;font-size:12px;color:var(--muted);padding-top:6px}
+  .nf-val{flex:1;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:7px 9px;white-space:pre-wrap;word-break:break-word;max-height:120px;overflow:auto}
+  .nf-copy{flex:0 0 auto;align-self:flex-start;background:#2563eb;color:#fff;border:0;border-radius:6px;padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer}
+  .nf-copy:hover{filter:brightness(1.1)} .nf-copy.done{background:#1a9c5b}
   .live-stage img{width:100%;height:auto;display:block;background:#000}   /* fill the width at the frame's natural aspect */
   .live-stage.hv{outline:2px solid var(--warn);outline-offset:-2px;cursor:default}
   /* fullscreen the live view — the stage fills the ENTIRE viewport; head floats, console hidden */
@@ -253,6 +261,7 @@
       <span class="live-hint" id="lhint"></span>
     </div>
     <div class="live-stage" id="lstage"><img id="limg" alt="" tabindex="0" draggable="false" style="user-select:none;-webkit-user-drag:none"><button id="fsbtn" class="fs-toggle" title="Fullscreen (Esc to exit)">⛶ Fullscreen</button></div>
+    <div id="nativefields" style="display:none"></div>
     <div class="console" id="lconsole" style="margin-top:12px;max-height:150px"></div>
   </div>
 
@@ -314,12 +323,33 @@ function clearStatus(){ $('#status').className='status'; }
 let _poll=null, _sid=null;
 function conLines(lines){ return (lines||[]).map(l=>{const c=/TELEGRAM/.test(l)?'telln':/OFF-SITE|FILLED|filled|POSTs|gate|Resumed|solve|Solve|HAND/.test(l)?'warnln':'';return `<div class="${c}">${esc(l)}</div>`;}).join(''); }
 
+// Copy-ready fields for a native (real-browser) report — the analyst pastes each into the opened form.
+function renderNative(nr){
+  const nf=$('#nativefields'); if(!nf) return;
+  if(!nr){ if(nf.dataset.on){ nf.style.display='none'; nf.innerHTML=''; nf.dataset.on=''; nf.dataset.key=''; } return; }
+  const key=JSON.stringify(nr);
+  if(nf.dataset.key===key) return;            // already rendered -> don't rebuild (keeps 'Copied ✓' + focus)
+  nf.dataset.key=key; nf.dataset.on='1';
+  const fields=[{k:'Message',v:nr.message||''},{k:'Name',v:nr.name||''},{k:'Email',v:nr.email||''},{k:'Phone',v:nr.phone||''}];
+  nf.innerHTML=`<div class="nf-title">Copy each field into the Telegram form (opened in your browser), tick the box + Submit:</div>`+
+    fields.map((f,i)=>`<div class="nf-row"><div class="nf-label">${f.k}</div><div class="nf-val">${esc(f.v)}</div><button class="nf-copy" data-i="${i}">Copy</button></div>`).join('');
+  nf.querySelectorAll('.nf-copy').forEach((b,i)=>{ b.onclick=()=>copyText(b, fields[i].v); });
+  nf.style.display='block';
+}
+function copyText(btn, text){
+  const flash=()=>{ if(!btn.dataset.o) btn.dataset.o=btn.textContent; btn.textContent='✓ Copied'; btn.classList.add('done'); setTimeout(()=>{ btn.textContent=btn.dataset.o; btn.classList.remove('done'); }, 1400); };
+  if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(text||'').then(flash).catch(()=>_fbCopy(text,flash)); }
+  else _fbCopy(text, flash);
+}
+function _fbCopy(text, cb){ try{ const ta=document.createElement('textarea'); ta.value=text||''; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); cb&&cb(); }catch(e){} }
+
 async function detonate(){
   const url = $('#url').value.trim();
   if(!url) return;
   if(_poll){ clearInterval(_poll); _poll=null; } _sid=null;   // stop any prior live session cleanly
   $('#go').disabled=true; $('#cancelbtn').style.display='none'; $('#out').className=''; clearStatus();
   $('#live').className='live on'; $('#lconsole').innerHTML=''; $('#limg').removeAttribute('src');
+  renderNative(null); $('#lstage').style.display='';   // clear any prior report copy-panel
   $('#lhint').textContent='Launching browser…'; $('#ls').textContent='starting'; $('#ls').className='ls';
   $('#takeover').style.display='none'; $('#resume').style.display='none';
   try{
@@ -356,12 +386,17 @@ function _startPoll(sid){
     $('#lstage').className='live-stage'+(hv?' hv':'');
     $('#takeover').style.display=(s.state==='running'&&!isRep)?'inline-flex':'none';
     $('#resume').style.display=hv?'inline-flex':'none';
+    const nat=isRep?(rep.native_report||null):null;
+    renderNative(nat);
+    $('#lstage').style.display = nat ? 'none' : '';      // native report -> show copy-fields instead of a frame
     if(isRep){
       // headed report: the real window is on the desktop — no in-app frame
       $('#limg').style.display='none'; $('#resume').textContent='✓ Done — I submitted';
-      $('#lhint').textContent = (s.state==='running')
-        ? 'Opening a browser window on your desktop…'
-        : 'A browser WINDOW opened on your desktop — solve the CAPTCHA + Submit there, then click Done.';
+      $('#lhint').textContent = nat
+        ? 'Opened in your browser — copy each field below into the form, tick the box + Submit, then click Done.'
+        : (s.state==='running')
+          ? 'Opening a browser window on your desktop…'
+          : 'A browser WINDOW opened on your desktop — solve the CAPTCHA + Submit there, then click Done.';
     } else {
       $('#limg').style.display=''; $('#resume').textContent='▶ Resume automation';
       $('#lhint').textContent = hv
