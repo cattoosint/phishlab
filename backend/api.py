@@ -562,6 +562,22 @@ async def demo_tall():
     return HTMLResponse(_TALL)
 
 
+_HANG = ("<!doctype html><html><head><title>Please wait — verifying your request</title></head>"
+         "<body style='margin:0;font-family:sans-serif'>"
+         "<h1 style='padding:20px'>Please wait — we are verifying your request. Do not close this window.</h1>"
+         "<form><input name='q' placeholder='type here to test' style='font-size:24px;padding:10px;margin:20px'></form>"
+         + "".join(f"<div style='height:220px;background:{'#12233a' if i % 2 else '#1a3350'};color:#fff;"
+                   f"font-size:44px;padding:24px'>Block {i} — scroll/click/type test</div>" for i in range(30))
+         + "</body></html>")
+
+
+@app.get("/demo-hang/")
+async def demo_hang():
+    """A tall 'please wait' page that never advances — the walker sits in wait-for-advance (~65s),
+    giving a stable take-over window to test scroll/click/type forwarding. Has a text input too."""
+    return HTMLResponse(_HANG)
+
+
 @app.api_route("/demo-opendir/{page:path}", methods=["GET", "POST"])
 async def demo_opendir(page: str = ""):
     p = page.strip("/")

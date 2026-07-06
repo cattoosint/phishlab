@@ -41,6 +41,24 @@ def _persist(sess) -> None:
         pass
 
 
+def _jpeg_dims(data: bytes):
+    """(w,h) of a JPEG from its SOF marker — to compare the streamed frame size to the page viewport
+    (a mismatch breaks take-over click mapping)."""
+    try:
+        i, n = 2, len(data)
+        while i < n - 9:
+            if data[i] != 0xFF:
+                i += 1
+                continue
+            marker = data[i + 1]
+            if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+                return {"w": (data[i + 7] << 8) | data[i + 8], "h": (data[i + 5] << 8) | data[i + 6]}
+            i += 2 + ((data[i + 2] << 8) | data[i + 3])
+    except Exception:
+        pass
+    return None
+
+
 def _evict() -> None:
     """Bound RAM: drop the oldest done/error sessions from memory (their report is on disk)."""
     if len(SESSIONS) <= SESSION_CAP:
@@ -86,6 +104,7 @@ class Session:
         }
         self.latest_frame: bytes | None = None
         self.viewport = {"width": 1280, "height": 720}
+        self._frame_dims = None
         self._page = None
         self.paused = False
         self._gate = asyncio.Event()
@@ -167,6 +186,7 @@ class Session:
             if pg is not None:
                 try:
                     self.latest_frame = await pg.screenshot(type="jpeg", quality=FRAME_QUALITY)
+                    self._frame_dims = _jpeg_dims(self.latest_frame) or self._frame_dims
                 except Exception:
                     pass   # screenshots can fail mid-navigation; just skip the frame
             # stream fast while the analyst is driving (handover), slower while automation runs
@@ -540,7 +560,9 @@ class Session:
 
     def snapshot_state(self) -> dict:
         return {"id": self.id, "state": self.state, "paused": self.paused,
-                "report": self.report, "has_frame": self.latest_frame is not None}
+                "report": self.report, "has_frame": self.latest_frame is not None,
+                "viewport": self.viewport,
+                "frame_dims": self._frame_dims}
 
 
 def create(url: str) -> Session:
