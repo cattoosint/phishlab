@@ -15,6 +15,7 @@ import uuid
 from urllib.parse import quote, urlsplit
 
 from . import browser as B
+from . import cf_solver as CF
 from . import enrich as E
 from . import extract as X
 from . import indicators as I
@@ -203,6 +204,72 @@ class Session:
         except Exception:
             pass
 
+    async def _apply_cf_capture(self, page, ctx, cap: dict, step: int, all_html: list) -> bool:
+        """Fold a SeleniumBase Cloudflare-solve capture into the report + try to hand the clearance to
+        the live Camoufox page. Returns True iff Camoufox is now PAST the wall (live walk continues)."""
+        self.report["cloudflare_bypass"] = {
+            "solved": bool(cap.get("solved")), "final_url": cap.get("final_url"),
+            "title": cap.get("title"), "attempts": cap.get("attempts"),
+            "error": cap.get("error"), "via": "seleniumbase",
+        }
+        if not cap.get("solved"):
+            return False
+        self.report["cf_warning_cleared"] = True
+        html = cap.get("html") or ""
+        self._log(f"  [OK] Cloudflare cleared via SeleniumBase — reached: "
+                  f"{cap.get('title') or cap.get('final_url')}")
+        # capture the page behind the wall as a timeline step (its own screenshot)
+        self.report["steps"].append({
+            "i": step, "action": "cf_cleared", "url": cap.get("final_url") or self.url,
+            "title": cap.get("title"), "screenshot": cap.get("screenshot"),
+            "note": "Cloudflare 'Suspected Phishing' warning solved (SeleniumBase); page behind it captured.",
+            "forms": cap.get("forms") or [],
+        })
+        # point the report's victim view + downstream (kit hunt) at the REAL phish, not the warning page
+        dv = (self.report.get("decloak") or {}).get("victim")
+        if isinstance(dv, dict) and cap.get("final_url"):
+            dv["url"] = cap["final_url"]
+            if cap.get("title"):
+                dv["title"] = cap["title"]
+        # feed the behind-the-wall content into IOC / exfil / brand extraction
+        if html:
+            all_html.append(html)
+            for t in X.telegram_channels(html):
+                if t not in self.report["exfil"]["telegram"]:
+                    self.report["exfil"]["telegram"].append(t)
+        for f in (cap.get("forms") or []):
+            if f.get("action"):
+                self.report["exfil"]["form_actions"].append(f.get("action"))
+        # best-effort: hand the Cloudflare clearance cookies to Camoufox + continue the LIVE walk
+        try:
+            pw = []
+            for c in (cap.get("cookies") or []):
+                name, val, dom = c.get("name"), c.get("value"), c.get("domain")
+                if not name or val is None or not dom:
+                    continue
+                ck = {"name": name, "value": val, "domain": dom, "path": c.get("path") or "/"}
+                if isinstance(c.get("expiry"), (int, float)):
+                    ck["expires"] = int(c["expiry"])
+                if c.get("secure") is not None:
+                    ck["secure"] = bool(c["secure"])
+                if c.get("httpOnly") is not None:
+                    ck["httpOnly"] = bool(c["httpOnly"])
+                pw.append(ck)
+            if pw:
+                await ctx.add_cookies(pw)
+            dest = cap.get("final_url") or self.url
+            await page.goto(dest, wait_until="domcontentloaded", timeout=B.NAV_TIMEOUT,
+                            referer="https://mail.google.com/")
+            await page.wait_for_timeout(SETTLE_MS)
+            snap = await _snapshot(page)
+            if not X.is_cf_phish_warning(snap.get("title"), snap.get("html")):
+                self._log("  handed the clearance to the live browser — continuing the walk on the real page.")
+                return True
+        except Exception:
+            pass
+        self._log("  clearance is Chrome-bound (didn't transfer to Camoufox) — analysis uses the captured page.")
+        return False
+
     async def run(self):
         t0 = self.report["started_at"]
         frames = None
@@ -309,6 +376,7 @@ class Session:
                 acted: set[str] = set()        # URLs we've already filled/clicked (stall guard)
                 interacted: set[str] = set()   # URLs we've already tried an interaction-reveal on
                 login_hunted: set[str] = set() # URLs where we've already followed a 'log in' link
+                cf_warned: set[str] = set()    # URLs where we've already tried to auto-clear a CF phishing warning
                 for step in range(MAX_STEPS):
                     if await self._checkpoint():          # analyst took over before this step
                         await page.wait_for_timeout(SETTLE_MS)
@@ -335,6 +403,40 @@ class Session:
                         break
 
                     if ch:
+                        # Cloudflare "Suspected Phishing" WARNING interstitial (Ignore & Proceed + a
+                        # Turnstile checkbox) — try to auto-clear it (verify + proceed) before parking on
+                        # handover. Real phishing sites on CF's blocklist show this before the actual kit.
+                        if (X.is_cf_phish_warning(snap.get("title"), snap.get("html"))
+                                and snap["url"] not in cf_warned):
+                            cf_warned.add(snap["url"])
+                            self._log(f"Step {step}: Cloudflare 'Suspected Phishing' warning detected.")
+                            # 1) quick in-browser clear — works only if the page isn't Turnstile-gated
+                            if await B.pass_cf_phish_warning(page):
+                                self.report["cf_warning_cleared"] = True
+                                self._log("  cleared the Cloudflare warning in-browser — continuing to the real site.")
+                                await self._sync_viewport(page)
+                                await page.wait_for_timeout(SETTLE_MS)
+                                continue
+                            # 2) hand off to SeleniumBase — it solves the managed Turnstile Camoufox can't
+                            if CF.available():
+                                self.report["cf_solving"] = True
+                                self._log("  Camoufox can't solve the managed Turnstile — handing off to the "
+                                          "Cloudflare solver (SeleniumBase).")
+                                self._log("  [MOUSE] A Chrome window will solve it with a real mouse click — "
+                                          "DO NOT touch your mouse/keyboard for ~30-60s.")
+                                cap = await CF.solve(self.url)
+                                self.report["cf_solving"] = False
+                                if await self._apply_cf_capture(page, vctx, cap, step, all_html):
+                                    continue       # clearance handed to Camoufox → keep the live walk going
+                                if cap.get("solved"):
+                                    self._log("  captured the phish behind Cloudflare; the live walk can't pass "
+                                              "the wall — finalizing analysis on the captured page.")
+                                    break
+                                self._log(f"  Cloudflare solver didn't get through "
+                                          f"({cap.get('error') or 'still blocked'}). Take over or 'Open in browser'.")
+                            else:
+                                self._log("  SeleniumBase not installed — can't auto-solve Cloudflare. "
+                                          "Take over or use 'Open in browser'.")
                         # anti-bot gate → auto-pause for takeover; re-evaluate the page after resume.
                         self.report["handover_needed"] = True
                         self._log(f"Step {step}: anti-bot gate ({', '.join(ch)}) - Take over to solve it, then Resume automation.")

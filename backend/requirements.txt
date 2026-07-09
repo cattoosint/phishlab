@@ -5,6 +5,12 @@ playwright==1.51.0
 fastapi>=0.110,<1
 uvicorn[standard]>=0.29,<1
 httpx[socks]>=0.26,<1   # [socks] = Tor/SOCKS proxy support for the multi-vantage tracker
-# Camoufox — real-fingerprint Firefox that passes Cloudflare/Turnstile. Set PHISH_BROWSER=camoufox to
-# use it (falls back to vanilla Firefox if the binary isn't fetched: python -m camoufox fetch).
+# Camoufox — real-fingerprint Firefox (spoofed TLS/JA3). Set PHISH_BROWSER=camoufox to use it (falls
+# back to vanilla Firefox if the binary isn't fetched: python -m camoufox fetch). NB: Camoufox handles
+# most decloaking but does NOT solve Cloudflare's hardened managed Turnstile on the phishing-warning
+# interstitial (the widget won't even render for it) — that hand-off goes to SeleniumBase below.
 camoufox[geoip]==0.4.11
+# SeleniumBase — UC (undetected-chromedriver) + CDP mode. Solves Cloudflare's "Suspected Phishing"
+# Turnstile that Camoufox can't (uc_gui_click_captcha uses a REAL OS-mouse click). Used only as the
+# Cloudflare-warning solver hand-off (phishlab/cf_solver.py); needs Chrome installed on the box.
+seleniumbase>=4.50

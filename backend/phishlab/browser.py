@@ -14,6 +14,7 @@ from __future__ import annotations
 import base64
 import logging
 import os
+import re
 from contextlib import asynccontextmanager
 
 logger = logging.getLogger("phishlab.browser")
@@ -328,3 +329,99 @@ async def screenshot_b64(page) -> str | None:
         return base64.b64encode(shot).decode()
     except Exception:
         return None
+
+
+# ── Cloudflare "Suspected Phishing" warning interstitial — auto-clear ──────────────
+# The phishing-blocklist warning page (extract.is_cf_phish_warning) has a Turnstile "Verify you are
+# human" checkbox + an "Ignore & Proceed" link. With a real-fingerprint browser (Camoufox) the managed
+# Turnstile usually passes on a click; then Ignore & Proceed reaches the real phish. Best-effort — a
+# hardened challenge still falls back to analyst handover.
+_CF_TURNSTILE_SEL = ('iframe[src*="challenges.cloudflare.com"], iframe[src*="turnstile"], '
+                     'iframe[title*="Cloudflare"], iframe[title*="challenge"], '
+                     'iframe[title*="verify" i], iframe[title*="human" i]')
+_CF_PROCEED_RE = re.compile(r"ignore\s*(?:&(?:amp;)?|and)\s*proceed", re.I)
+
+
+async def _cf_still_warning(page) -> bool:
+    """True if the live page is still showing the Cloudflare phishing warning (used to confirm we left it)."""
+    try:
+        txt = await page.evaluate(
+            "() => (document.title + ' ' + (document.body ? document.body.innerText : '')).toLowerCase()")
+    except Exception:
+        return False
+    txt = txt or ""
+    return ("suspected phishing" in txt or "reported for potential phishing" in txt
+            or "ignore & proceed" in txt or "ignore and proceed" in txt)
+
+
+async def _click_turnstile(page) -> bool:
+    """Best-effort tick of the Turnstile 'verify you are human' checkbox. Returns True if we clicked
+    something. No Turnstile widget present → returns False fast (no long iframe waits)."""
+    try:
+        el = await page.query_selector(_CF_TURNSTILE_SEL)
+    except Exception:
+        el = None
+    if not el:
+        return False
+    # 1) click the checkbox inside the challenge iframe (cross-origin → frame_locator)
+    try:
+        fl = page.frame_locator(_CF_TURNSTILE_SEL).first
+        try:
+            await fl.locator("input[type=checkbox], label, #challenge-stage").first.click(timeout=4000)
+            return True
+        except Exception:
+            pass
+    except Exception:
+        pass
+    # 2) coordinate click on the widget (works through nested iframes) — checkbox sits at the left edge
+    try:
+        box = await el.bounding_box()
+        if box:
+            await page.mouse.click(box["x"] + 28, box["y"] + box["height"] / 2)
+            return True
+    except Exception:
+        pass
+    return False
+
+
+async def pass_cf_phish_warning(page) -> bool:
+    """Auto-clear Cloudflare's 'Suspected Phishing' warning: tick 'Verify you are human' (Turnstile),
+    then click 'Ignore & Proceed'. Returns True if the page left the warning."""
+    try:
+        # 1) solve the Turnstile checkbox; give it a moment to verify / auto-advance
+        await _click_turnstile(page)
+        try:
+            await page.wait_for_timeout(2500)
+        except Exception:
+            pass
+        # 2) if still on the warning, click 'Ignore & Proceed'
+        if await _cf_still_warning(page):
+            clicked = False
+            try:
+                await page.get_by_text(_CF_PROCEED_RE).first.click(timeout=5000)
+                clicked = True
+            except Exception:
+                try:                                    # JS fallback: click the matching anchor/button
+                    clicked = await page.evaluate("""() => {
+                      const rx = /ignore\\s*(?:&(?:amp;)?|and)\\s*proceed/i;
+                      for (const e of document.querySelectorAll('a, button, [role=button], input[type=button], input[type=submit]')) {
+                        const t = (e.innerText || e.value || e.textContent || '').trim();
+                        if (rx.test(t)) { e.click(); return true; }
+                      }
+                      return false;
+                    }""")
+                except Exception:
+                    clicked = False
+            if clicked:
+                try:
+                    await page.wait_for_load_state("domcontentloaded", timeout=12000)
+                except Exception:
+                    pass
+                try:
+                    await page.wait_for_timeout(1500)
+                except Exception:
+                    pass
+        # 3) success = no longer on the warning page
+        return not await _cf_still_warning(page)
+    except Exception:
+        return False

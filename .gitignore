@@ -14,3 +14,9 @@ screenshots/
 *.log
 .env
 .DS_Store
+# SeleniumBase (Cloudflare solver / SBSession engine) runtime artifacts — not committed
+downloaded_files/
+latest_logs/
+archived_logs/
+assets/
+.pytest_cache/

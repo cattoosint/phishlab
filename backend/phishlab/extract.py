@@ -57,6 +57,21 @@ def detect_challenge(title: str, html: str) -> list[str]:
     return [name for name, keys in CHALLENGE_MARKERS.items() if any(k in blob for k in keys)]
 
 
+# Cloudflare's "Suspected Phishing" WARNING interstitial (served when a URL is on Cloudflare's phishing
+# blocklist): a "This website has been reported…" notice with an "Ignore & Proceed" link + a Turnstile
+# "Verify you are human" checkbox. Unlike the "just a moment" JS bot-gate, this is a *bypassable* warning
+# — tick the box + click Ignore & Proceed and you reach the real phish. Detect it so the walker auto-
+# clears it instead of parking on handover.
+def is_cf_phish_warning(title: str, html: str) -> bool:
+    """True if the page is Cloudflare's 'Suspected Phishing' warning interstitial (bypassable via
+    'Ignore & Proceed'), as opposed to a hard 'just a moment' bot-gate."""
+    blob = ((title or "") + " " + (html or "")).lower()
+    strong = ("suspected phishing" in blob or "reported for potential phishing" in blob
+              or "this website has been reported" in blob)
+    proceed = "ignore & proceed" in blob or "ignore and proceed" in blob or "ignore &amp; proceed" in blob
+    return bool(strong and (proceed or "cf-turnstile" in blob or "challenges.cloudflare.com" in blob))
+
+
 def telegram_channels(html: str) -> list[dict]:
     """Telegram exfil channels found in the page: bot token(s) + any chat_ids."""
     tokens = set(TG_TOKEN.findall(html or "")) | set(TG_API.findall(html or ""))

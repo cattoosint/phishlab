@@ -52,9 +52,18 @@ _load_dotenv()
 from phishlab import mailbox as M        # noqa: E402  (import after .env is loaded)
 from phishlab import net_guard as G      # noqa: E402
 from phishlab import report as R         # noqa: E402
-from phishlab import session as S        # noqa: E402
+from phishlab import sb_session as SB    # noqa: E402  (SeleniumBase/Chrome — the default engine)
+from phishlab import session as S        # noqa: E402  (Camoufox — proxy/decloak backup, PHISH_ENGINE=camoufox)
 from phishlab import tracker as T        # noqa: E402
 from phishlab import updater as U        # noqa: E402
+
+
+def _detonate(url: str):
+    """Start a live detonation with the configured engine. Default = SeleniumBase/Chrome (solves
+    Cloudflare, streams screenshots); PHISH_ENGINE=camoufox uses the legacy Camoufox session."""
+    if (os.getenv("PHISH_ENGINE") or "seleniumbase").strip().lower() == "camoufox":
+        return S.create(url)
+    return SB.create(url)
 from phishlab.kit import ART_DIR         # noqa: E402
 from phishlab.sandbox import detonate    # noqa: E402
 
@@ -258,7 +267,7 @@ async def session_start(req: DetonateReq):
     err = _guard(url)
     if err:
         return JSONResponse({"error": err}, status_code=400)
-    s = S.create(url)
+    s = _detonate(url)
     return {"id": s.id, "state": s.state}
 
 
@@ -384,7 +393,7 @@ class RenameReq(BaseModel):
 @app.on_event("startup")
 async def _startup():
     T.start()
-    M.start(lambda url: S.create(url).id)   # Gmail intake -> auto-detonate (dormant w/o creds)
+    M.start(lambda url: _detonate(url).id)   # Gmail intake -> auto-detonate (dormant w/o creds)
 
 
 @app.get("/api/mail/queue")
@@ -502,6 +511,48 @@ _PHISH_PAGES = {"": _PHISH_LOGIN, "verify": _PHISH_WAIT, "otp": _PHISH_OTP, "don
 @app.api_route("/demo-phish/{page:path}", methods=["GET", "POST"])
 async def demo_phish(page: str = ""):
     return HTMLResponse(_PHISH_PAGES.get(page.strip("/"), _PHISH_LOGIN))
+
+
+# Detonate http://127.0.0.1:8090/demo-cfphish/ — reproduces Cloudflare's "Suspected Phishing" WARNING
+# interstitial (the blocklist page): an "Ignore & Proceed" link + a "Verify you are human" checkbox.
+# Tests the walker's auto-clear (extract.is_cf_phish_warning -> browser.pass_cf_phish_warning): it should
+# click Ignore & Proceed and land on the real (fake) Microsoft login behind it, then detonate that.
+# NB: the checkbox here is an ordinary demo checkbox, NOT a genuine Cloudflare Turnstile (that iframe is
+# CF-hosted and can't be self-served) — so this fixture exercises detection + the Ignore & Proceed path;
+# the Turnstile-click path only runs against a real Cloudflare page (needs Camoufox's real fingerprint).
+_CFPHISH_WARN = (
+    "<!doctype html><html><head><meta charset='utf-8'><title>Suspected Phishing</title>"
+    "<style>body{font-family:'Segoe UI',Arial,sans-serif;background:#fff;color:#313131;margin:0}"
+    ".box{max-width:760px;margin:9vh auto;padding:0 20px}h1{font-size:30px;font-weight:600;margin:.1em 0 .5em}"
+    ".warn{color:#d64b3f;font-weight:700;font-size:15px}.desc{color:#4a4a4a;line-height:1.6;font-size:15px}"
+    ".acts{margin:22px 0}.btn{background:#2b2b2b;color:#fff;padding:9px 16px;border-radius:3px;"
+    "text-decoration:none;font-size:14px;margin-right:16px}a.proceed{color:#d64b3f;font-size:14px}"
+    ".cf-turnstile{margin:18px 0;border:1px solid #e0e0e0;border-radius:4px;background:#fafafa;"
+    "max-width:300px;padding:12px 14px;display:flex;align-items:center;gap:10px}"
+    ".cf-turnstile input{width:20px;height:20px}.ray{color:#8a8a8a;font-size:12px;margin-top:40px;"
+    "border-top:1px solid #eee;padding-top:12px}</style></head><body><div class='box'>"
+    "<div class='warn'>&#9888; Warning</div><h1>Suspected Phishing</h1>"
+    "<p class='desc'><b>This website has been reported for potential phishing.</b><br>"
+    "Phishing is when a site attempts to steal sensitive information by falsely presenting as a safe source.</p>"
+    "<div class='acts'><a class='btn' href='https://www.cloudflare.com/phishing/' target='_blank'>Learn More</a>"
+    "<a class='proceed' href='/demo-cfphish/site'>Ignore &amp; Proceed</a></div>"
+    "<div class='cf-turnstile'><input type='checkbox'><span>Verify you are human</span>"
+    "<span style='margin-left:auto;color:#f38020;font-weight:700'>CLOUDFLARE</span></div>"
+    "<div class='ray'>Cloudflare Ray ID: <b>a183f0fead64401a</b> &middot; Performance &amp; security by Cloudflare</div>"
+    "</div></body></html>")
+_CFPHISH_SITE = ("<!doctype html><html><head><title>Sign in to your account</title>" + _PHISH_CSS +
+                 "</head><body><div class='box'><div class='logo'>Microsoft</div><h1>Sign in</h1>"
+                 "<form method='POST' action='/demo-cfphish/done'>"
+                 "<input type='email' name='loginfmt' placeholder='Email, phone, or Skype' required>"
+                 "<input type='password' name='passwd' placeholder='Password' required>"
+                 "<button type='submit'>Sign in</button></form></div></body></html>")
+_CFPHISH_PAGES = {"": _CFPHISH_WARN, "site": _CFPHISH_SITE,
+                  "done": "<!doctype html><h1>Account verified</h1>"}
+
+
+@app.api_route("/demo-cfphish/{page:path}", methods=["GET", "POST"])
+async def demo_cfphish(page: str = ""):
+    return HTMLResponse(_CFPHISH_PAGES.get(page.strip("/"), _CFPHISH_WARN))
 
 
 # Detonate http://127.0.0.1:8090/demo-lead/ — a marketing/lead-capture funnel (First/Last/Phone/Email,
