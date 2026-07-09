@@ -14,3 +14,6 @@ camoufox[geoip]==0.4.11
 # Turnstile that Camoufox can't (uc_gui_click_captcha uses a REAL OS-mouse click). Used only as the
 # Cloudflare-warning solver hand-off (phishlab/cf_solver.py); needs Chrome installed on the box.
 seleniumbase>=4.50
+# cryptography — parse the served TLS leaf cert for the certificate card (subject/issuer/validity/SANs),
+# works even on the invalid/self-signed certs phishing hosts use. Prebuilt wheels, no compiler needed.
+cryptography>=42

@@ -220,7 +220,7 @@ def _evict():
         WATCHES.pop(w.id, None)
 
 
-def start_watch(url: str, username: str | None = None, interval: int = 60, max_hours: float = 2) -> Watch:
+def start_watch(url: str, username: str | None = None, interval: int = 30, max_hours: float = 2) -> Watch:
     w = Watch(_norm(url), (username or USER_DEFAULT).strip(), interval, int(max_hours * 3600))
     WATCHES[w.id] = w
     _evict()

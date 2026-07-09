@@ -475,7 +475,7 @@ async def pt_watch(req: PTWatchReq):
     url = _norm_url(req.url)
     if not url or url in ("http://", "https://"):
         return JSONResponse({"error": "Enter a URL to watch."}, status_code=400)
-    w = PT.start_watch(url, req.username, req.interval or 60, req.max_hours or 2)
+    w = PT.start_watch(url, req.username, req.interval or 30, req.max_hours or 2)
     return w.snapshot()
 
 

@@ -149,7 +149,7 @@ def _vantages() -> list[dict]:
             pair = pair.strip()
             if "=" in pair:
                 label, host = pair.split("=", 1)
-                out.append({"label": f"nord-{label.strip()}",
+                out.append({"label": f"vpn-{label.strip()}",
                             "proxy": f"socks5://{nu}:{npw}@{host.strip()}:1080"})
     return out
 
@@ -272,7 +272,9 @@ async def vantage_probe(url: str) -> list[dict]:
 
     async def one(v):
         try:
-            kw = {"timeout": 15, "follow_redirects": True, "verify": False, "headers": {"User-Agent": UA}}
+            # proxied vantages (Tor especially) are slow to build a circuit → give them more time
+            kw = {"timeout": 35 if v["proxy"] else 15, "follow_redirects": True, "verify": False,
+                  "headers": {"User-Agent": UA}}
             if v["proxy"]:
                 kw["proxy"] = v["proxy"]
             async with httpx.AsyncClient(**kw) as c:

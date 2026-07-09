@@ -210,34 +210,98 @@ def _claimed_brand(html: str, title: str) -> str | None:
     return None
 
 
-def _cert_info(host: str, port: int):
-    """(issuer_str, self_signed) for the live served leaf cert. Blocking — run via asyncio.to_thread."""
-    try:
-        ctx = ssl.create_default_context()
+def _cert_details(host: str, port: int):
+    """Rich details of the LIVE served leaf cert — works even for invalid/self-signed certs (phishing
+    hosts usually have bad ones). Blocking — run via asyncio.to_thread. Returns a dict or None."""
+    der = None
+    try:                                          # unverified handshake: always capture the cert
+        uctx = ssl.create_default_context()
+        uctx.check_hostname = False
+        uctx.verify_mode = ssl.CERT_NONE
         with socket.create_connection((host, port), timeout=6) as sock:
-            with ctx.wrap_socket(sock, server_hostname=host) as ss:
-                cert = ss.getpeercert() or {}
-        issuer = ""
-        for tup in cert.get("issuer", ()):
-            for k, v in tup:
-                if k in ("organizationName", "commonName"):
-                    issuer += " " + str(v)
-        return issuer.strip().lower(), False
-    except ssl.SSLCertVerificationError as e:
-        return "", "self" in str(e).lower() and "signed" in str(e).lower()
+            with uctx.wrap_socket(sock, server_hostname=host) as ss:
+                der = ss.getpeercert(binary_form=True)
     except Exception:
-        return None, False
+        return None
+    if not der:
+        return None
+    trusted, validity_error = False, None
+    try:                                          # verified handshake: is the chain actually trusted?
+        with socket.create_connection((host, port), timeout=6) as sock:
+            with ssl.create_default_context().wrap_socket(sock, server_hostname=host):
+                trusted = True
+    except ssl.SSLCertVerificationError as e:
+        validity_error = re.sub(r"\s+", " ", str(e)).split("(")[0].strip()[:90]
+    except Exception as e:
+        validity_error = type(e).__name__
+    try:
+        from datetime import datetime, timezone
+        from cryptography import x509
+        c = x509.load_der_x509_certificate(der)
+    except Exception:
+        return {"trusted": trusted, "validity_error": validity_error,
+                "self_signed": bool(validity_error and "self-signed" in (validity_error or "").lower())}
+
+    def _cn_o(name):
+        cn = o = None
+        try:
+            cn = name.get_attributes_for_oid(x509.NameOID.COMMON_NAME)[0].value
+        except Exception:
+            pass
+        try:
+            o = name.get_attributes_for_oid(x509.NameOID.ORGANIZATION_NAME)[0].value
+        except Exception:
+            pass
+        return cn, o
+
+    scn, so = _cn_o(c.subject)
+    icn, io = _cn_o(c.issuer)
+    try:
+        sans = c.extensions.get_extension_for_class(x509.SubjectAlternativeName).value.get_values_for_type(x509.DNSName)
+    except Exception:
+        sans = []
+    try:
+        nb, na = c.not_valid_before_utc, c.not_valid_after_utc
+    except AttributeError:                        # older cryptography
+        from datetime import timezone as _tz
+        nb = c.not_valid_before.replace(tzinfo=_tz.utc)
+        na = c.not_valid_after.replace(tzinfo=_tz.utc)
+    now = datetime.now(timezone.utc)
+    try:
+        sig_alg = c.signature_hash_algorithm.name if c.signature_hash_algorithm else None
+    except Exception:
+        sig_alg = None
+    return {
+        "subject_cn": scn, "subject_org": so, "issuer_cn": icn, "issuer_org": io,
+        "not_before": nb.strftime("%Y-%m-%d"), "not_after": na.strftime("%Y-%m-%d"),
+        "days_to_expiry": (na - now).days, "age_days": (now - nb).days,
+        "sans": list(sans)[:25], "san_count": len(sans),
+        "serial": format(c.serial_number, "x")[:40], "sig_alg": sig_alg,
+        "self_signed": (c.subject == c.issuer), "trusted": trusted, "validity_error": validity_error,
+        "free_ca": bool(io and any(fc in io.lower() for fc in _FREE_CA)),
+    }
 
 
-async def cert_probe(host: str, port: int, brand: str | None) -> list[dict]:
-    issuer, self_signed = await asyncio.to_thread(_cert_info, host, port)
+def _cert_signals(cert: dict | None, brand: str | None) -> list[dict]:
+    """AiTM / phishing signals derived from the served cert details."""
     out: list[dict] = []
-    if self_signed:
+    if not cert:
+        return out
+    if cert.get("self_signed"):
         out.append({"name": "self_signed_cert", "toolkit": "Modlishka", "score": 35, "tier": "tls",
                     "evidence": "served leaf cert is self-signed (proxy default; real logins never are)"})
-    if issuer and brand and any(fc in issuer for fc in _FREE_CA):
+    issuer = (cert.get("issuer_org") or cert.get("issuer_cn") or "").lower()
+    if issuer and brand and cert.get("free_ca"):
         out.append({"name": "cert_brand_incoherence", "toolkit": None, "score": 30, "tier": "tls",
                     "evidence": f"page claims {brand} but cert from a free CA ({issuer[:40]}) — {brand} doesn't use one"})
+    d = cert.get("days_to_expiry")
+    if isinstance(d, int) and d < 0:
+        out.append({"name": "cert_expired", "toolkit": None, "score": 15, "tier": "tls",
+                    "evidence": f"TLS certificate EXPIRED {abs(d)}d ago"})
+    age = cert.get("age_days")
+    if isinstance(age, int) and 0 <= age <= 3:
+        out.append({"name": "cert_fresh", "toolkit": None, "score": 12, "tier": "tls",
+                    "evidence": f"TLS cert issued {age}d ago (freshly minted — common for throwaway phishing hosts)"})
     return out
 
 
@@ -317,14 +381,17 @@ async def analyze(url: str) -> dict:
     brand = _claimed_brand(html, title)
 
     tasks = [wildcard_dns_probe(host, cdn)]
+    cert_det = None
     if scheme == "https" and not _is_ip(host):
-        tasks += [cert_probe(host, port, brand), timing_probe(host, port, cdn)]
+        cert_det = await asyncio.to_thread(_cert_details, host, port)
+        tasks += [timing_probe(host, port, cdn)]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     sigs: list[dict] = []
     sigs += analyze_headers(headers, cdn, url)
     sigs += analyze_cookies(set_cookies, scheme)
     sigs += analyze_url(url)
+    sigs += _cert_signals(cert_det, brand)
     for res in results:
         if isinstance(res, Exception) or not res:
             continue
@@ -336,7 +403,8 @@ async def analyze(url: str) -> dict:
         sigs = [s for s in sigs if s.get("name") in _STRONG]
 
     return {"signals": sigs, "toolkit": _infer_toolkit(sigs), "brand": brand,
-            "aitm_score": min(100, sum(int(s.get("score", 0)) for s in sigs)), "cdn": cdn}
+            "aitm_score": min(100, sum(int(s.get("score", 0)) for s in sigs)), "cdn": cdn,
+            "cert": cert_det}
 
 
 def score_signals(aitm: dict) -> list[tuple[int, str]]:

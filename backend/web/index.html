@@ -128,8 +128,9 @@
 
   .grid{display:grid;grid-template-columns:1fr 340px;gap:20px}
   @media(max-width:880px){.grid{grid-template-columns:1fr}}
-  .panels{display:grid;grid-template-columns:repeat(auto-fit,minmax(285px,1fr));gap:16px;align-items:start;margin-bottom:20px}
-  .panels .card{margin:0}
+  /* masonry columns — variable-height cards pack tightly (no ragged grid gaps) */
+  .panels{column-width:310px;column-gap:16px;margin-bottom:20px}
+  .panels .card{margin:0 0 16px;break-inside:avoid;-webkit-column-break-inside:avoid}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden;margin-bottom:20px}
   .card h2{font-size:12px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);
     margin:0;padding:12px 15px;border-bottom:1px solid var(--line);font-weight:600}
@@ -266,7 +267,7 @@
     <div class="sb-cases" id="sb-cases"></div>
     <button id="updbtn" class="upd-badge" style="display:none" onclick="applyUpdate()"
             title="Pull the latest PhishLab from GitHub and hot-reload">⬆ Update available</button>
-    <div class="sb-foot"><span class="dot" id="hdot" title="engine"></span> run on the isolated host</div>
+    <div class="sb-foot"><span class="dot" id="hdot" title="engine"></span></div>
   </aside>
   <main class="main"><div class="wrap">
 
@@ -278,7 +279,8 @@
       <button class="go" id="go">Detonate</button>
       <button class="go" id="cancelbtn" style="display:none;background:var(--bad)" title="stop this scan">Cancel</button>
     </div>
-    <div class="hint">Drives a real browser through the page and submits <b>fake</b> credentials to any login form. Screenshots every step.</div>
+    <div class="hint">Drives a real browser through the page and submits <b>fake</b> credentials to any login form. Screenshots every step.<br>
+      <span style="color:var(--faint)">↳ Or <b>email the detonation box</b> with the URL as the <b>subject line</b> (body empty) — it's auto-picked up and detonated.</span></div>
   </section>
 
   <div id="inbox-strip" style="display:none;margin-bottom:20px">
@@ -327,6 +329,7 @@
       <div class="card c-rose"><h2>Code analysis</h2><div class="body" id="indicators"></div></div>
       <div class="card c-red"><h2>Exfil</h2><div class="body" id="exfil"></div></div>
       <div class="card c-amber"><h2>Enrichment</h2><div class="body" id="enrich"></div></div>
+      <div class="card c-green"><h2>TLS certificate</h2><div class="body" id="cert"></div></div>
       <div class="card c-green"><h2>Phishing kit</h2><div class="body" id="kit"></div></div>
       <div class="card c-teal"><h2>Decloak</h2><div class="body" id="decloak"></div></div>
       <div class="card c-blue"><h2>Network · routing</h2><div class="body" id="network"></div></div>
@@ -550,6 +553,27 @@ function render(rep){
     const cls=/TELEGRAM/.test(l)?'telln':/OFF-SITE|FILLED|filled|POSTs/.test(l)?'warnln':'';
     return `<div class="${cls}">${esc(l)}</div>`; }).join('');
 
+  // TLS certificate
+  const cert=((rep.enrichment||{}).aitm||{}).cert||null; const cc=$('#cert');
+  if(cc){
+    if(cert){
+      const exp=(typeof cert.days_to_expiry==='number'&&cert.days_to_expiry<0);
+      const kv=(k,v,warn)=> (v!=null&&v!=='')?`<div class="kv"><span class="k">${k}</span><span class="v"${warn?' style="color:var(--bad)"':''}>${esc(String(v))}</span></div>`:'';
+      cc.innerHTML=
+        kv('subject', cert.subject_cn||cert.subject_org||'—')+
+        kv('issuer', [cert.issuer_org,cert.issuer_cn].filter(Boolean).join(' · ')||'—')+
+        kv('valid from', cert.not_before)+
+        kv('valid to', cert.not_after, exp)+
+        (typeof cert.days_to_expiry==='number'?kv('expires in', exp?`EXPIRED ${Math.abs(cert.days_to_expiry)}d ago`:`${cert.days_to_expiry} days`, exp):'')+
+        (typeof cert.age_days==='number'?kv('issued', `${cert.age_days} day(s) ago`, cert.age_days<=3):'')+
+        kv('trusted', cert.trusted===true?'yes ✓':(cert.validity_error?('no — '+cert.validity_error):'no'), cert.trusted===false)+
+        (cert.self_signed?kv('self-signed','yes ⚠',true):'')+
+        (cert.free_ca?kv('CA type','free / DV ⚠',true):'')+
+        kv('signature', cert.sig_alg)+
+        (cert.san_count?`<div class="kv"><span class="k">SANs</span><span class="v">${cert.san_count}</span></div><ul class="list">${(cert.sans||[]).slice(0,10).map(s=>`<li>${esc(s)}</li>`).join('')}${cert.san_count>10?`<li class="empty-note">+${cert.san_count-10} more…</li>`:''}</ul>`:'');
+    } else { cc.innerHTML='<div class="empty-note">— (no HTTPS cert served, or an IP host)</div>'; }
+  }
+
   // redirect chain (link -> link -> final point)
   const redir=rep.redirects||[]; const rc=$('#redirectcard');
   if(rc){
@@ -657,7 +681,7 @@ function render(rep){
               const b=inapp.includes(x.key)?` <button class="cbtn rep" onclick="startReport('${x.key}','${esc(x.name).replace(/'/g,'')}')">report in-app ▶</button>`:'';
               return `<li><a href="${esc(x.url)}" target="_blank">${esc(x.name)}</a> <span style="color:var(--faint)"> — ${esc(x.note)}</span>${b}</li>`;
             }).join('')}</ul>`+
-            `<div class="empty-note" style="margin-top:8px">“report in-app” opens the form in the frame + pre-fills the URL — solve the CAPTCHA there, submit, then Resume. Links open the site.</div>`+ptPromptHtml(rep.url);
+            ptPromptHtml(rep.url);
         }).catch(()=>{});
       }
     } else { rp.innerHTML='<div class="empty-note">available when the run finishes</div>'; }
@@ -771,9 +795,8 @@ function ptMsg(url, detail){ return `⚠️ Phishing confirmed on PhishTank: ${d
 function ptPromptHtml(url){
   return `<div class="kv" style="margin-top:10px"><span class="k">PhishTank</span></div>`+
     `<div id="pt-inline" data-url="${esc(url)}">`+
-      `<div style="font-size:12.5px;color:var(--muted);margin:4px 0 9px">Reported this URL to PhishTank yet? Click Yes and I'll poll for its <b>phish_detail</b> link (for WhatsApp).</div>`+
-      `<div class="pt-acts"><button class="cbtn rep" onclick="ptYes()">✓ Yes — watch for the link</button>`+
-      `<a class="cbtn" href="https://phishtank.net/add_web_phish.php" target="_blank" style="text-decoration:none">Report it now ▶</a></div>`+
+      `<div style="font-size:12.5px;color:var(--muted);margin:4px 0 9px">Poll PhishTank for this URL's <b>phish_detail</b> link (to share on WhatsApp).</div>`+
+      `<div class="pt-acts"><button class="cbtn rep" onclick="ptYes()">✓ Watch for the link</button></div>`+
     `</div>`;
 }
 function ptReset(){ if(_ptPoll){ clearInterval(_ptPoll); _ptPoll=null; } _ptWatchId=null; }
@@ -785,7 +808,7 @@ async function ptYes(){
     if(w.error){ el.innerHTML='<div class="empty-note">'+esc(w.error)+'</div>'; return; }
     _ptWatchId=w.id; ptRenderInline(w);
     if(_ptPoll) clearInterval(_ptPoll);
-    _ptPoll=setInterval(ptTick, 25000);   // gentle — updates #pt-inline only, never reloads the page
+    _ptPoll=setInterval(ptTick, 30000);   // 30s — updates #pt-inline ONLY (change-detected), never touches the rest of the page
   }catch(e){ el.innerHTML='<div class="empty-note">Could not start the watch.</div>'; }
 }
 async function ptTick(){
@@ -796,25 +819,28 @@ async function ptTick(){
     if(w){ ptRenderInline(w); if(w.state!=='watching'){ clearInterval(_ptPoll); _ptPoll=null; } }
   }catch(e){}
 }
+function ptSet(html){ const el=$('#pt-inline'); if(el && el.innerHTML!==html) el.innerHTML=html; }  // touch the DOM only when it actually changes → no flicker / no "refresh"
 function ptRenderInline(w){
-  const el=$('#pt-inline'); if(!el) return;
+  if(!$('#pt-inline')) return;
+  let html;
   if(w.state==='found'&&w.detail_url){
     const msg=ptMsg(w.url,w.detail_url), wa=`https://wa.me/?text=${encodeURIComponent(msg)}`;
     const cl={exact:['exact match','var(--ok)'],host:['same host','var(--ok)'],domain:['same domain — verify','var(--warn)'],checkurl:['via checkurl','var(--ok)']}[w.confidence]||[w.confidence||'',''];
     const match=w.matched_url?`<div class="pt-meta">matched PhishTank entry: <span style="color:var(--muted)">${esc(w.matched_url)}</span>${w.submitted?` · submitted ${esc(w.submitted)}`:''}${cl[0]?` · <b style="color:${cl[1]}">${esc(cl[0])}</b>`:''}</div>`:'';
-    el.innerHTML=`<div class="detail">🎣 <a href="${esc(w.detail_url)}" target="_blank">${esc(w.detail_url)}</a></div>`+match+
+    html=`<div class="detail">🎣 <a href="${esc(w.detail_url)}" target="_blank">${esc(w.detail_url)}</a></div>`+match+
       `<div class="pt-acts">`+
         `<button class="cbtn rep" onclick="copyText(this,'${jsq(w.detail_url)}')">Copy link</button>`+
         `<button class="cbtn" onclick="copyText(this,'${jsq(msg)}')">Copy for WhatsApp</button>`+
         `<a class="pt-wa" href="${esc(wa)}" target="_blank">Share to WhatsApp ▶</a></div>`;
   } else if(w.state==='watching'){
-    const left=Math.max(0,Math.round((w.deadline*1000-Date.now())/60000));
-    el.innerHTML=`<div style="font-size:12.5px;color:var(--accent)">● Watching PhishTank — ${w.attempts} check(s) done, ~${left} min left</div>`+
-      `<div class="pt-meta">auto-checks every ${w.interval}s (no page reload) · <button class="cbtn" onclick="ptStop()">Stop</button></div>`+
+    // static text (no ticking counters) so the card doesn't visibly refresh while polling in the background
+    html=`<div style="font-size:12.5px;color:var(--accent)">● Watching PhishTank — auto-checks every ${w.interval}s <span style="color:var(--faint)">(background, no page reload)</span></div>`+
+      `<div class="pt-acts" style="margin-top:7px"><button class="cbtn" onclick="ptStop()">Stop</button></div>`+
       (w.error?`<div class="pt-meta" style="color:var(--warn)">last error: ${esc(w.error)}</div>`:'');
   } else {
-    el.innerHTML=`<div style="font-size:12.5px;color:var(--muted)">Watch ${esc(w.state)} — not indexed within the window. <button class="cbtn rep" onclick="ptYes()">Watch again</button></div>`;
+    html=`<div style="font-size:12.5px;color:var(--muted)">Watch ${esc(w.state)} — not indexed within the window. <button class="cbtn rep" onclick="ptYes()">Watch again</button></div>`;
   }
+  ptSet(html);
 }
 async function ptStop(){ if(_ptWatchId){ try{ await fetch('/api/phishtank/watch/'+_ptWatchId+'/stop',{method:'POST'}); }catch(e){} } ptTick(); if(_ptPoll){clearInterval(_ptPoll);_ptPoll=null;} }
 async function loadInbox(){
@@ -941,11 +967,12 @@ function markPhishing(rep, v){
   box.appendChild(inp); box.appendChild(ok); mn.appendChild(box); inp.focus(); inp.select();
 }
 async function markFP(rep){
-  const mb=$('#markbtn'), fb=$('#fpbtn'), mn=$('#marknote');
   try{ await fetch('/api/tracker?url='+encodeURIComponent(rep.url),{method:'DELETE'}); }catch(e){}      // remove if tracked
   try{ await fetch('/api/mail/dismiss',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:rep.url})}); }catch(e){}
-  if(mb) mb.style.display='none'; if(fb) fb.style.display='none';
-  if(mn) mn.innerHTML='<span class="mark saved" style="margin:0">✓ Marked false positive — removed from tracking</span>';
+  ptReset();                                    // stop any PhishTank watch for this now-dismissed case
+  $('#out').className='';                        // hide the whole report — a false positive disappears from the screen
+  window._doneSid=null; window._repSid=null; try{ sessionStorage.removeItem('pl_sid'); }catch(e){}
+  setStatus('Marked false positive — dismissed.');
   loadTracker(); loadInbox();
 }
 // inline rename — no browser popup: the name becomes an editable field in place
