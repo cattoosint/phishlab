@@ -218,16 +218,39 @@ class SBSession:
                 pass
 
     # ── Cloudflare "Suspected Phishing" solve (SeleniumBase real-mouse) ──
+    def _still_gated(self, sb) -> bool:
+        """True while a Cloudflare gate (warning or challenge) is still on-screen."""
+        try:
+            t = (sb.get_title() or "").lower()
+        except Exception:
+            t = ""
+        b = self._body(sb)
+        return ("suspected phishing" in b or "reported for potential" in b or "verification failed" in b
+                or "just a moment" in t or "attention required" in t or "verify you are human" in b
+                or "checking your browser" in b or "needs to review the security" in b)
+
+    def _is_cf_gate(self, title, html) -> bool:
+        """A Cloudflare gate: the 'Suspected Phishing' WARNING or a 'Just a moment'/'Attention Required'
+        interactive CHALLENGE. (Matches visible challenge text/title, not just injected CF scripts.)"""
+        if X.is_cf_phish_warning(title, html):
+            return True
+        t = (title or "").lower()
+        b = (html or "").lower()
+        if "just a moment" in t or "attention required" in t:
+            return True
+        return any(k in b for k in ("verify you are human", "checking your browser",
+                                    "needs to review the security of your connection"))
+
     def _solve_cf(self, sb) -> bool:
+        """Clear a Cloudflare gate (warning OR challenge). Real-mouse Turnstile solve + retry."""
         for attempt in range(3):
             if self._cancel.is_set():
                 return False
-            # first try a plain 'Ignore & Proceed' / proceed link — clears non-Turnstile-gated variants
-            # (and the demo) with NO mouse movement; a disabled #bypass-button just no-ops here
+            # a plain 'Ignore & Proceed'/proceed link first (non-Turnstile variants / demo) — no mouse
             try:
                 if sb.execute_script(_ADVANCE_JS):
                     self._wait(sb, 3)
-                    if "suspected phishing" not in self._body(sb):
+                    if not self._still_gated(sb):
                         return True
             except Exception:
                 pass
@@ -237,18 +260,18 @@ class SBSession:
                 pass
             for _ in range(7):
                 self._wait(sb, 2)
-                b = self._body(sb)
-                if "suspected phishing" not in b and "verification failed" not in b:
+                if not self._still_gated(sb):
                     return True
-                if self._bypass_enabled(sb):
+                if self._bypass_enabled(sb):       # CF phishing-warning 'Ignore & Proceed' button
                     try:
                         sb.click("#bypass-button")
                     except Exception:
                         pass
                     self._wait(sb, 3)
+                    if not self._still_gated(sb):
+                        return True
                     break
-            b = self._body(sb)
-            if "verification failed" in b:            # token rejected server-side → retry with a fresh one
+            if "verification failed" in self._body(sb):   # token rejected server-side → fresh token
                 self._log(f"  Cloudflare token rejected (attempt {attempt + 1}) — retrying…")
                 try:
                     sb.uc_open_with_reconnect(self.url, reconnect_time=4)
@@ -256,9 +279,9 @@ class SBSession:
                     pass
                 self._wait(sb, 2)
                 continue
-            if "suspected phishing" not in b and b:
+            if not self._still_gated(sb):
                 return True
-        return "suspected phishing" not in self._body(sb)
+        return not self._still_gated(sb)
 
     # ── page primitives ──
     def _capture_step(self, sb, action, i):
@@ -302,6 +325,7 @@ class SBSession:
         seen_fill: set[str] = set()
         advanced: set[str] = set()
         cert_tried: set[str] = set()
+        cf_tried: set[str] = set()
         for i in range(MAX_STEPS):
             if self._cancel.is_set():
                 break
@@ -331,17 +355,23 @@ class SBSession:
             self._log(f"Step {i}: {st['url']} — \"{st['title']}\" — {len(st.get('forms', []))} form(s)"
                       + (f" — TELEGRAM exfil bot {st['telegram'][0]['bot_id']}" if st["telegram"] else ""))
 
-            # Cloudflare "Suspected Phishing" warning → solve it (real mouse), then re-loop on the real site
-            if X.is_cf_phish_warning(st.get("title"), html):
+            # Cloudflare gate (Suspected-Phishing WARNING or Just-a-moment/Attention-Required CHALLENGE)
+            if self._is_cf_gate(st.get("title"), html):
+                if st.get("url") in cf_tried:
+                    self._log("  still Cloudflare-gated after a solve attempt — stopping.")
+                    break
+                cf_tried.add(st.get("url"))
+                if "turnstile" not in self.report["challenge"]:
+                    self.report["challenge"].append("turnstile")
                 self.report["cf_solving"] = True
-                self._log("Cloudflare 'Suspected Phishing' warning — solving with a real mouse click. "
+                self._log("Cloudflare challenge/warning — solving (real-mouse Turnstile if needed). "
                           "DO NOT touch your mouse/keyboard (~30-60s).")
                 ok = self._solve_cf(sb)
                 self.report["cf_solving"] = False
                 if ok:
                     self.report["cf_warning_cleared"] = True
                     self.report["cloudflare_bypass"] = {"solved": True, "via": "seleniumbase"}
-                    self._log("[OK] Cloudflare cleared — continuing to the real site.")
+                    self._log("[OK] Cloudflare cleared — continuing.")
                     self._wait(sb, 1)
                     continue
                 self.report["cloudflare_bypass"] = {"solved": False, "via": "seleniumbase"}
