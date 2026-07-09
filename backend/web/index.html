@@ -227,6 +227,24 @@
   /* lightbox */
   #lb{position:fixed;inset:0;background:rgba(6,9,12,.9);display:none;align-items:center;justify-content:center;padding:30px;z-index:9}
   #lb.on{display:flex} #lb img{max-width:100%;max-height:100%;border:1px solid var(--line);border-radius:6px}
+
+  /* PhishTank watch */
+  .pt{padding:14px 16px;border:1px solid var(--line);border-left-width:3px;border-radius:8px;margin-bottom:10px;background:var(--panel)}
+  .pt.watching{border-left-color:var(--accent)} .pt.found{border-left-color:var(--ok)}
+  .pt.expired,.pt.stopped,.pt.error{border-left-color:var(--muted)}
+  .pt-top{display:flex;align-items:center;gap:12px;justify-content:space-between}
+  .pt .u{font-family:var(--mono);font-size:13px;word-break:break-all}
+  .pt .st{font-family:var(--mono);font-size:12px;text-transform:uppercase;letter-spacing:.05em;font-weight:700;white-space:nowrap}
+  .pt.watching .st{color:var(--accent)} .pt.found .st{color:var(--ok)} .pt.expired .st,.pt.stopped .st,.pt.error .st{color:var(--muted)}
+  .pt .detail{margin-top:9px;padding:9px 11px;background:#0a1a12;border:1px solid #1e4030;border-radius:7px;font-family:var(--mono);font-size:12.5px;word-break:break-all;color:#8fe6b6}
+  .pt-acts{display:flex;gap:7px;flex-wrap:wrap;margin-top:9px}
+  .pt-wa{background:#25d366;color:#04220f;border:0;border-radius:6px;font-weight:700;font-size:12px;padding:6px 12px;cursor:pointer;text-decoration:none;display:inline-block}
+  .pt-wa:hover{filter:brightness(1.08)}
+  .pt-meta{color:var(--faint);font-size:11px;margin-top:6px}
+  .pt-recent{margin-top:10px;border-top:1px solid var(--line);padding-top:8px}
+  .pt-recent summary{cursor:pointer;color:var(--muted);font-size:12px}
+  .pt-recent .r{padding:4px 0;font-size:11.5px;border-bottom:1px solid var(--line)}
+  .pt-recent .r a{font-family:var(--mono)}
 </style>
 </head>
 <body>
@@ -602,7 +620,7 @@ function render(rep){
   if(rp){
     if(rsid && rep.verdict){
       window._curUrl=rep.url;
-      if(window._repSid!==rsid){ window._repSid=rsid;
+      if(window._repSid!==rsid){ window._repSid=rsid; ptReset();
         fetch('/api/session/'+rsid+'/targets').then(r=>r.json()).then(d=>{
           const inapp=['safebrowsing','microsoft'];
           rp.innerHTML=`<div class="kv"><span class="k">report the URL to</span></div>`+
@@ -610,7 +628,7 @@ function render(rep){
               const b=inapp.includes(x.key)?` <button class="cbtn rep" onclick="startReport('${x.key}','${esc(x.name).replace(/'/g,'')}')">report in-app ▶</button>`:'';
               return `<li><a href="${esc(x.url)}" target="_blank">${esc(x.name)}</a> <span style="color:var(--faint)"> — ${esc(x.note)}</span>${b}</li>`;
             }).join('')}</ul>`+
-            `<div class="empty-note" style="margin-top:8px">“report in-app” opens the form in the frame + pre-fills the URL — solve the CAPTCHA there, submit, then Resume. Links open the site.</div>`;
+            `<div class="empty-note" style="margin-top:8px">“report in-app” opens the form in the frame + pre-fills the URL — solve the CAPTCHA there, submit, then Resume. Links open the site.</div>`+ptPromptHtml(rep.url);
         }).catch(()=>{});
       }
     } else { rp.innerHTML='<div class="empty-note">available when the run finishes</div>'; }
@@ -715,6 +733,59 @@ function switchView(v){
   if(v==='tracker') loadTracker(true);   // force a fresh, fully-collapsed list of ALL cases
   if(v==='analyze') loadInbox();
 }
+
+// ── PhishTank watch (inline in the Takedown card) ───────────────────────────
+// "Reported to PhishTank yet?" → click Yes → starts a background watch that PhishLab polls every 60s
+// (up to 2h). This updates ONLY the #pt-inline element in place — no page reload, gentle 25s UI refresh.
+let _ptPoll=null, _ptWatchId=null;
+function ptMsg(url, detail){ return `⚠️ Phishing confirmed on PhishTank: ${detail}  (site: ${url})`; }
+function ptPromptHtml(url){
+  return `<div class="kv" style="margin-top:10px"><span class="k">PhishTank</span></div>`+
+    `<div id="pt-inline" data-url="${esc(url)}">`+
+      `<div style="font-size:12.5px;color:var(--muted);margin:4px 0 9px">Reported this URL to PhishTank yet? Click Yes and I'll poll for its <b>phish_detail</b> link (for WhatsApp).</div>`+
+      `<div class="pt-acts"><button class="cbtn rep" onclick="ptYes()">✓ Yes — watch for the link</button>`+
+      `<a class="cbtn" href="https://phishtank.net/add_web_phish.php" target="_blank" style="text-decoration:none">Report it now ▶</a></div>`+
+    `</div>`;
+}
+function ptReset(){ if(_ptPoll){ clearInterval(_ptPoll); _ptPoll=null; } _ptWatchId=null; }
+async function ptYes(){
+  const el=$('#pt-inline'); if(!el) return; const url=el.dataset.url;
+  el.innerHTML='<div style="font-size:12.5px;color:var(--accent)">⏳ Starting PhishTank watch…</div>';
+  try{
+    const w=await (await fetch('/api/phishtank/watch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})})).json();
+    if(w.error){ el.innerHTML='<div class="empty-note">'+esc(w.error)+'</div>'; return; }
+    _ptWatchId=w.id; ptRenderInline(w);
+    if(_ptPoll) clearInterval(_ptPoll);
+    _ptPoll=setInterval(ptTick, 25000);   // gentle — updates #pt-inline only, never reloads the page
+  }catch(e){ el.innerHTML='<div class="empty-note">Could not start the watch.</div>'; }
+}
+async function ptTick(){
+  if(!_ptWatchId){ if(_ptPoll){clearInterval(_ptPoll);_ptPoll=null;} return; }
+  try{
+    const d=await (await fetch('/api/phishtank/watches')).json();
+    const w=(d.watches||[]).find(x=>x.id===_ptWatchId);
+    if(w){ ptRenderInline(w); if(w.state!=='watching'){ clearInterval(_ptPoll); _ptPoll=null; } }
+  }catch(e){}
+}
+function ptRenderInline(w){
+  const el=$('#pt-inline'); if(!el) return;
+  if(w.state==='found'&&w.detail_url){
+    const msg=ptMsg(w.url,w.detail_url), wa=`https://wa.me/?text=${encodeURIComponent(msg)}`;
+    el.innerHTML=`<div class="detail">🎣 <a href="${esc(w.detail_url)}" target="_blank">${esc(w.detail_url)}</a></div>`+
+      `<div class="pt-acts">`+
+        `<button class="cbtn rep" onclick="copyText(this,'${jsq(w.detail_url)}')">Copy link</button>`+
+        `<button class="cbtn" onclick="copyText(this,'${jsq(msg)}')">Copy for WhatsApp</button>`+
+        `<a class="pt-wa" href="${esc(wa)}" target="_blank">Share to WhatsApp ▶</a></div>`;
+  } else if(w.state==='watching'){
+    const left=Math.max(0,Math.round((w.deadline*1000-Date.now())/60000));
+    el.innerHTML=`<div style="font-size:12.5px;color:var(--accent)">● Watching PhishTank — ${w.attempts} check(s) done, ~${left} min left</div>`+
+      `<div class="pt-meta">auto-checks every ${w.interval}s (no page reload) · <button class="cbtn" onclick="ptStop()">Stop</button></div>`+
+      (w.error?`<div class="pt-meta" style="color:var(--warn)">last error: ${esc(w.error)}</div>`:'');
+  } else {
+    el.innerHTML=`<div style="font-size:12.5px;color:var(--muted)">Watch ${esc(w.state)} — not indexed within the window. <button class="cbtn rep" onclick="ptYes()">Watch again</button></div>`;
+  }
+}
+async function ptStop(){ if(_ptWatchId){ try{ await fetch('/api/phishtank/watch/'+_ptWatchId+'/stop',{method:'POST'}); }catch(e){} } ptTick(); if(_ptPoll){clearInterval(_ptPoll);_ptPoll=null;} }
 async function loadInbox(){
   try{
     const d=await (await fetch('/api/mail/queue')).json();

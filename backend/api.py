@@ -51,6 +51,7 @@ _load_dotenv()
 
 from phishlab import mailbox as M        # noqa: E402  (import after .env is loaded)
 from phishlab import net_guard as G      # noqa: E402
+from phishlab import phishtank as PT     # noqa: E402
 from phishlab import report as R         # noqa: E402
 from phishlab import sb_session as SB    # noqa: E402  (SeleniumBase/Chrome — the default engine)
 from phishlab import session as S        # noqa: E402  (Camoufox — proxy/decloak backup, PHISH_ENGINE=camoufox)
@@ -456,6 +457,46 @@ async def tracker_check(url: str):
 @app.delete("/api/tracker")
 async def tracker_remove(url: str):
     return {"ok": await T.remove(_norm_url(url))}
+
+
+# ── PhishTank reporting poller ────────────────────────────────────────────────
+# Report a suspect URL to PhishTank (under the team account, default ""), then WATCH here:
+# PhishLab polls the reporter's PhishTank user page every ~60s (up to 2h) until the URL is ingested, then
+# surfaces its phish_detail.php link to copy into WhatsApp for the takedown thread.
+class PTWatchReq(BaseModel):
+    url: str = Field(min_length=1, max_length=4000)
+    username: str | None = None
+    interval: int | None = None
+    max_hours: float | None = None
+
+
+@app.post("/api/phishtank/watch")
+async def pt_watch(req: PTWatchReq):
+    url = _norm_url(req.url)
+    if not url or url in ("http://", "https://"):
+        return JSONResponse({"error": "Enter a URL to watch."}, status_code=400)
+    w = PT.start_watch(url, req.username, req.interval or 60, req.max_hours or 2)
+    return w.snapshot()
+
+
+@app.get("/api/phishtank/watches")
+async def pt_watches():
+    return {"watches": [w.snapshot() for w in PT.list_watches()], "default_user": PT.USER_DEFAULT}
+
+
+@app.post("/api/phishtank/watch/{wid}/stop")
+async def pt_stop(wid: str):
+    w = PT.stop_watch(wid)
+    if not w:
+        return JSONResponse({"error": "no such watch"}, status_code=404)
+    return w.snapshot()
+
+
+@app.get("/api/phishtank/check")
+async def pt_check(url: str, username: str | None = None):
+    """One-shot: is this URL already on PhishTank (under the reporter)? Returns the detail link if so."""
+    hit, rows = await PT.find_for_url(_norm_url(url), username or PT.USER_DEFAULT)
+    return {"hit": hit, "recent": rows[:8], "default_user": PT.USER_DEFAULT}
 
 
 # ── built-in EXAMPLE phishing kit (safe, self-hosted) to test the walker end-to-end ─────────────
