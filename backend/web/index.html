@@ -293,7 +293,6 @@
   <div class="live" id="live">
     <div class="live-head">
       <span class="ls" id="ls">live</span>
-      <button class="go" id="takeover" style="display:none;padding:7px 16px;background:var(--warn);color:#241a10">✋ Take over</button>
       <button class="go" id="resume" style="display:none;padding:7px 16px">▶ Resume automation</button>
       <button class="go" id="opennative" style="padding:7px 14px;background:#26324a;color:#dbe7ff;border:1px solid #3a4a6a"
               title="Open this URL in your real browser (solve Cloudflare there, or inspect natively)"
@@ -403,7 +402,7 @@ async function detonate(){
   $('#live').className='live on'; $('#lconsole').innerHTML=''; $('#limg').removeAttribute('src');
   renderNative(null); $('#lstage').style.display='';   // clear any prior report copy-panel
   $('#lhint').textContent='Launching browser…'; $('#ls').textContent='starting'; $('#ls').className='ls';
-  $('#takeover').style.display='none'; $('#resume').style.display='none';
+  $('#resume').style.display='none';
   try{
     const r=await fetch('/api/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})});
     const d=await r.json();
@@ -437,7 +436,6 @@ function _startPoll(sid){
     $('#cfbanner').className='cfbanner'+(rep.cf_solving?' on':'');   // real-mouse Cloudflare solve in progress
     $('#ls').textContent=rep.cf_solving?'solving cloudflare':(hv?'you have control':s.state); $('#ls').className='ls'+(hv||rep.cf_solving?' hv':'');
     $('#lstage').className='live-stage'+(hv?' hv':'');
-    $('#takeover').style.display=(s.state==='running'&&!isRep)?'inline-flex':'none';
     $('#resume').style.display=hv?'inline-flex':'none';
     const nat=isRep?(rep.native_report||null):null;
     renderNative(nat);
@@ -454,7 +452,7 @@ function _startPoll(sid){
       $('#limg').style.display=''; $('#resume').textContent='▶ Resume automation';
       $('#lhint').textContent = hv
         ? 'You have control — click, scroll, and type on the frame to solve the challenge, then Resume automation.'
-        : 'Detonating live… — press Take over to drive the browser yourself.';
+        : 'Detonating live in a Chrome window on the desktop…';
     }
     if((s.state==='done'||s.state==='error'||s.state==='cancelled')&&!done){
       done=true; clearInterval(_poll); if(!isRep&&s.state!=='cancelled') window._doneSid=sid; _sid=null;
@@ -518,7 +516,6 @@ document.addEventListener('keydown',(e)=>{
   if(e.key.length===1){ _send({type:'type',text:e.key}); e.preventDefault(); }
   else if(['Enter','Backspace','Tab','Delete','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)){ _send({type:'key',key:e.key}); e.preventDefault(); }
 });
-$('#takeover').addEventListener('click',async()=>{ const id=_sid; if(id){ await fetch('/api/session/'+id+'/takeover',{method:'POST'}); } });
 $('#resume').addEventListener('click',async()=>{ const id=_sid; if(id){ await fetch('/api/session/'+id+'/resume',{method:'POST'}); } });
 
 function verdictClass(label,score){ if(score>=45||label==='confirmed_phishing'||label==='likely_phishing') return 'v-bad';

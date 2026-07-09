@@ -211,7 +211,9 @@ async def _capture_one(p, v: dict, url: str) -> dict:
     """Render the URL through ONE vantage (its proxy) and screenshot what it actually sees."""
     launch_kw = {"headless": True}
     if v["proxy"]:
-        launch_kw["proxy"] = {"server": v["proxy"]}
+        # Playwright/Firefox proxy understands socks5:// (NOT socks5h://) — normalize so it doesn't
+        # speak HTTP to Tor's SOCKS port ("This is a SOCKS proxy, not an HTTP proxy").
+        launch_kw["proxy"] = {"server": v["proxy"].replace("socks5h://", "socks5://")}
     br = None
     try:
         br = await p.firefox.launch(**launch_kw)
