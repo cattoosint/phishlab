@@ -126,7 +126,7 @@ def _main(url: str, out: str) -> int:
             return False
 
     try:
-        with SB(uc=True, headless=False, locale="en", incognito=True) as sb:
+        with SB(uc=True, headless=False, locale="en") as sb:   # not incognito: HTTPS-First blocks HTTP phish
             for attempt in range(3):
                 result["attempts"] = attempt + 1
                 sb.uc_open_with_reconnect(url, reconnect_time=5)

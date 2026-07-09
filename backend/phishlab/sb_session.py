@@ -539,7 +539,10 @@ class SBSession:
             self._decloak()
             self._log("Opening Chrome (undetected)…")
             from seleniumbase import SB
-            with SB(uc=True, headless=False, locale="en", incognito=True) as sb:
+            # NOT incognito: incognito forces Chrome's HTTPS-First mode, which blocks HTTP-only phishing
+            # sites with a "This site doesn't support a secure connection" wall. SeleniumBase already gives
+            # each run a fresh temp profile, so isolation is preserved without the HTTPS-First warning.
+            with SB(uc=True, headless=False, locale="en") as sb:
                 self._sb = sb
                 self._ignore_certs(sb)            # accept bad TLS certs up front (before first nav)
                 self._log("Loading the page…")
