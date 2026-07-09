@@ -129,7 +129,7 @@
   .grid{display:grid;grid-template-columns:1fr 340px;gap:20px}
   @media(max-width:880px){.grid{grid-template-columns:1fr}}
   /* masonry columns — variable-height cards pack tightly (no ragged grid gaps) */
-  .panels{column-width:310px;column-gap:16px;margin-bottom:20px}
+  .panels{column-width:345px;column-gap:16px;margin-bottom:20px}
   .panels .card{margin:0 0 16px;break-inside:avoid;-webkit-column-break-inside:avoid}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden;margin-bottom:20px}
   .card h2{font-size:12px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);
@@ -271,7 +271,6 @@
     <div class="sb-cases" id="sb-cases"></div>
     <button id="updbtn" class="upd-badge" style="display:none" onclick="applyUpdate()"
             title="Pull the latest PhishLab from GitHub and hot-reload">⬆ Update available</button>
-    <div class="sb-foot"><span class="dot" id="hdot" title="engine"></span></div>
   </aside>
   <main class="main"><div class="wrap">
 
@@ -530,7 +529,8 @@ function verdictClass(label,score){ if(score>=45||label==='confirmed_phishing'||
 
 // ── SpiderFoot-style force-directed detonation graph (self-contained; no external lib) ──
 const GRAPH={raf:null,nodes:[],edges:[],idx:{},svg:null,drag:null,W:880,H:360};
-const G_COL={root:'#4a9eda',hop:'#939ea8',final:'#3fb27f',exfil:'#d95f57',telegram:'#d072b0'};
+const G_COL={root:'#4a9eda',hop:'#939ea8',final:'#3fb27f',exfil:'#d95f57',telegram:'#d072b0',ioc:'#9b8cf0'};
+const G_SKIP=/cloudflare|jsdelivr|googleapis|gstatic|googletagmanager|google-analytics|fonts\.|cdnjs|bootstrapcdn|w3\.org|schema\.org|akamai|jquery|cloudflareinsights/i;
 function _ghost(u){ try{ return new URL(u).host||u; }catch(e){ return String(u||'').slice(0,32); } }
 function buildGraph(rep){
   const nodes=[],edges=[],seen={};
@@ -543,9 +543,17 @@ function buildGraph(rep){
     n.st=h.status; prev=n; finalN=n;
   });
   if(!finalN && rep.url){ finalN=add('root',_ghost(rep.url),'root',18); }
+  const specHost=finalN?finalN.label:'';
+  // credentials posted
   [...new Set((rep.steps||[]).filter(s=>s.action==='fill+submit').map(s=>s.creds_sent_to).filter(Boolean))]
     .forEach((a,i)=>{ const n=add('x'+i,_ghost(a),'exfil',13); if(finalN)edges.push({from:finalN.id,to:n.id,label:'creds'}); });
+  // AiTM reverse-proxy relay backends
+  ((rep.network||{}).relay_to||[]).forEach((h,i)=>{ const n=add('r'+i,h,'exfil',13); if(finalN)edges.push({from:finalN.id,to:n.id,label:'AiTM relay'}); });
+  // Telegram exfil bots
   ((rep.exfil||{}).telegram||[]).forEach((t,i)=>{ const n=add('tg'+i,'TG '+String(t.bot_id||''),'telegram',13); if(finalN)edges.push({from:finalN.id,to:n.id,label:'exfil'}); });
+  // off-host IOC domains (skip the specimen host + common CDN/analytics noise)
+  [...new Set(((rep.iocs||{}).domains||[]).filter(d=>d && d!==specHost && !G_SKIP.test(d)))].slice(0,8)
+    .forEach((d,i)=>{ const n=add('io'+i,d,'ioc',11); if(finalN)edges.push({from:finalN.id,to:n.id,label:''}); });
   return {nodes,edges};
 }
 function _gpt(ev){ const r=GRAPH.svg.getBoundingClientRect(); return {x:(ev.clientX-r.left)/r.width*GRAPH.W, y:(ev.clientY-r.top)/r.height*GRAPH.H}; }
@@ -567,8 +575,8 @@ function renderGraph(rep){
   const card=$('#redirectcard'), svg=$('#graphsvg'); if(!card||!svg) return;
   if(GRAPH.raf){ cancelAnimationFrame(GRAPH.raf); GRAPH.raf=null; }
   const {nodes,edges}=buildGraph(rep);
-  if(nodes.length<2){ card.style.display='none'; return; }
-  card.style.display=''; $('#rdcount').textContent=nodes.length+' nodes · '+edges.length+' edges';
+  if(nodes.length<1){ card.style.display='none'; return; }
+  card.style.display=''; $('#rdcount').textContent=nodes.length+' node'+(nodes.length===1?'':'s')+' · '+edges.length+' edge'+(edges.length===1?'':'s');
   const W=svg.clientWidth||880, H=360, idx={};
   nodes.forEach((n,i)=>{ idx[n.id]=n; const a=2*Math.PI*i/nodes.length; n.x=W/2+Math.cos(a)*130; n.y=H/2+Math.sin(a)*95; n.vx=0;n.vy=0; });
   Object.assign(GRAPH,{nodes,edges,idx,svg,W,H,drag:null});
@@ -577,7 +585,8 @@ function renderGraph(rep){
     +edges.map((e,i)=>`<line class="g-edge" data-e="${i}" marker-end="url(#arr)"></line>`).join('')
     +edges.map((e,i)=>`<text class="g-elab" data-e="${i}">${esc(e.label||'')}</text>`).join('')
     +nodes.map((n,i)=>`<g class="g-node" data-n="${i}"><circle r="${n.r}" fill="${G_COL[n.type]||'#888'}"></circle><text class="g-lab" dy="${n.r+13}">${esc(n.label)}</text></g>`).join('');
-  $('#graphlegend').innerHTML=Object.entries({root:'specimen',hop:'redirect',final:'landing',exfil:'creds go here',telegram:'telegram exfil'}).map(([k,v])=>`<span class="g-leg"><i style="background:${G_COL[k]}"></i>${v}</span>`).join('');
+  const present=new Set(nodes.map(n=>n.type));
+  $('#graphlegend').innerHTML=Object.entries({root:'specimen',hop:'redirect',final:'landing',exfil:'creds go here',telegram:'telegram exfil',ioc:'off-host IOC'}).filter(([k])=>present.has(k)).map(([k,v])=>`<span class="g-leg"><i style="background:${G_COL[k]}"></i>${v}</span>`).join('');
   svg.querySelectorAll('.g-node').forEach(el=>{ el.addEventListener('mousedown',ev=>{ ev.preventDefault(); GRAPH.drag=nodes[+el.dataset.n]; if(!GRAPH.raf) GRAPH.raf=requestAnimationFrame(_gtick); }); });
   svg.onmousemove=ev=>{ if(GRAPH.drag){ const p=_gpt(ev); GRAPH.drag.x=p.x; GRAPH.drag.y=p.y; } };
   svg.onmouseup=svg.onmouseleave=()=>{ GRAPH.drag=null; };
@@ -727,8 +736,8 @@ function render(rep){
           const inapp=['safebrowsing','microsoft'];
           rp.innerHTML=`<div class="kv"><span class="k">report the URL to</span></div>`+
             `<ul class="list">${(d.targets||[]).map(x=>{
-              const b=inapp.includes(x.key)?` <button class="cbtn rep" onclick="startReport('${x.key}','${esc(x.name).replace(/'/g,'')}')">report in-app ▶</button>`:'';
-              return `<li><a href="${esc(x.url)}" target="_blank">${esc(x.name)}</a> <span style="color:var(--faint)"> — ${esc(x.note)}</span>${b}</li>`;
+              const b=inapp.includes(x.key)?`<div style="margin-top:6px"><button class="cbtn rep" onclick="startReport('${x.key}','${esc(x.name).replace(/'/g,'')}')">report in-app ▶</button></div>`:'';
+              return `<li><a href="${esc(x.url)}" target="_blank">${esc(x.name)}</a> <span style="color:var(--faint)">— ${esc(x.note)}</span>${b}</li>`;
             }).join('')}</ul>`+
             ptPromptHtml(rep.url);
         }).catch(()=>{});
@@ -1098,7 +1107,7 @@ async function openNative(url){
 }
 
 // health dot
-fetch('/api/health').then(r=>r.ok?null:Promise.reject()).catch(()=>{ $('#hdot').style.background='var(--bad)'; });
+fetch('/api/health').then(r=>r.ok?null:Promise.reject()).catch(()=>{ const hd=$('#hdot'); if(hd) hd.style.background='var(--bad)'; });
 
 // ── in-app self-update from GitHub ───────────────────────────────────────────────────────────────
 async function checkUpdate(){
