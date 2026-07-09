@@ -36,20 +36,46 @@ def _norm(url: str) -> str:
     return u
 
 
-def _key(u: str) -> str:
-    """Normalize a URL for prefix-matching (the user page truncates long URLs with '…')."""
-    u = (u or "").lower().strip().rstrip(".")
+def _split(u: str) -> tuple[str, str]:
+    """(host_without_www, path) — lowercased, scheme/trailing-slash/'…'-truncation stripped."""
+    u = (u or "").strip().rstrip(".").lower()
     u = re.sub(r"^https?://", "", u)
     u = re.sub(r"^www\.", "", u)
-    return u.rstrip("/")
+    if "/" in u:
+        host, path = u.split("/", 1)
+        path = "/" + path.rstrip("/")
+    else:
+        host, path = u, ""
+    return host, path
 
 
-def _match(target: str, listed: str) -> bool:
-    """The listed URL is often truncated, so prefix-match either direction."""
-    t, l = _key(target), _key(listed)
-    if not t or not l or len(l) < 8:
-        return False
-    return t.startswith(l) or l.startswith(t)
+def _reg(host: str) -> str:
+    """Naive registrable domain (eTLD+1), handling the common multi-part TLDs (co.uk, com.sg…)."""
+    p = host.split(".")
+    if len(p) >= 3 and p[-2] in ("com", "co", "org", "net", "gov", "edu", "ac"):
+        return ".".join(p[-3:])
+    return ".".join(p[-2:]) if len(p) >= 2 else host
+
+
+def match_url(target: str, listed: str) -> str | None:
+    """How confidently `listed` (a PhishTank entry, possibly truncated) is the SAME thing as `target`:
+      'exact'  — same host + the path is a prefix either way (listing truncates long URLs)
+      'host'   — same host, different path (same phishing host, likely the same incident)
+      'domain' — same registrable domain, different subdomain (weaker; verify)
+      None     — different registrable domain (e.g. dbs.com.sg vs dbs.com → NOT matched)
+    Scheme / www / trailing-slash differences are ignored throughout."""
+    th, tp = _split(target)
+    lh, lp = _split(listed)
+    if not th or not lh or len(lh) < 4:
+        return None
+    if th == lh:
+        if not lp or not tp or tp.startswith(lp) or lp.startswith(tp):
+            return "exact"
+        return "host"
+    tr, lr = _reg(th), _reg(lh)
+    if tr and tr == lr and "." in tr:
+        return "domain"
+    return None
 
 
 def _detail(pid: str) -> str:
@@ -110,13 +136,21 @@ async def check_url(url: str) -> dict | None:
 
 
 async def find_for_url(url: str, username: str) -> tuple[dict | None, list[dict]]:
-    """Look for `url` in the reporter's PhishTank submissions (+ checkurl supplement).
-    Returns (hit_or_None, recent_rows)."""
+    """Look for `url` in the reporter's PhishTank submissions (rows are newest-first, so the first match
+    is the most recent) + a checkurl supplement. Returns (hit_or_None, recent_rows). The hit carries the
+    matched listing + submission time + confidence so the analyst can VERIFY it's the right link."""
     rows = await user_rows(username)
-    hit = next((r for r in rows if r.get("url") and _match(url, r["url"])), None)
-    if not hit:
-        hit = await check_url(url)
-    return hit, rows
+    for r in rows:                       # newest-first → most-recent match wins (handles "within 1h")
+        conf = match_url(url, r.get("url") or "")
+        if conf:
+            return {"detail_url": r["detail_url"], "phish_id": r["phish_id"], "matched_url": r.get("url"),
+                    "submitted": r.get("submitted"), "online": r.get("online"),
+                    "confidence": conf, "source": "user_page"}, rows
+    ck = await check_url(url)
+    if ck:
+        return {**ck, "matched_url": ck.get("url"), "confidence": "checkurl", "source": "checkurl",
+                "submitted": None}, rows
+    return None, rows
 
 
 class Watch:
@@ -131,6 +165,9 @@ class Watch:
         self.state = "watching"          # watching | found | expired | stopped | error
         self.detail_url: str | None = None
         self.phish_id: str | None = None
+        self.matched_url: str | None = None      # the (possibly truncated) URL PhishTank listed
+        self.submitted: str | None = None        # when PhishTank shows it was submitted
+        self.confidence: str | None = None       # exact | host | domain | checkurl
         self.last_checked: float | None = None
         self.next_at = self.started
         self.recent: list[dict] = []
@@ -140,6 +177,7 @@ class Watch:
     def snapshot(self) -> dict:
         return {"id": self.id, "url": self.url, "username": self.username, "state": self.state,
                 "attempts": self.attempts, "detail_url": self.detail_url, "phish_id": self.phish_id,
+                "matched_url": self.matched_url, "submitted": self.submitted, "confidence": self.confidence,
                 "started": self.started, "deadline": self.deadline, "interval": self.interval,
                 "last_checked": self.last_checked, "next_at": self.next_at,
                 "recent": self.recent[:8], "error": self.error}
@@ -157,6 +195,9 @@ async def _run(w: Watch):
                 if hit and hit.get("detail_url"):
                     w.detail_url = hit["detail_url"]
                     w.phish_id = str(hit.get("phish_id") or "")
+                    w.matched_url = hit.get("matched_url")
+                    w.submitted = hit.get("submitted")
+                    w.confidence = hit.get("confidence")
                     w.state = "found"
                     break
             except Exception as exc:

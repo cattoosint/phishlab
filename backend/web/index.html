@@ -228,6 +228,15 @@
   #lb{position:fixed;inset:0;background:rgba(6,9,12,.9);display:none;align-items:center;justify-content:center;padding:30px;z-index:9}
   #lb.on{display:flex} #lb img{max-width:100%;max-height:100%;border:1px solid var(--line);border-radius:6px}
 
+  /* redirect chain graph */
+  .rd-node{border:1px solid var(--line);border-radius:7px;padding:8px 12px;background:var(--panel2);max-width:660px;word-break:break-all}
+  .rd-node.start{border-left:3px solid var(--accent)}
+  .rd-node.end{border-left:3px solid var(--ok)}
+  .rd-h{font-family:var(--mono);font-size:13px;font-weight:700;color:var(--text)}
+  .rd-p{font-family:var(--mono);font-size:11.5px;color:var(--muted);margin-top:2px}
+  .rd-arrow{color:var(--faint);font-size:14px;margin:5px 0 5px 16px;display:flex;align-items:center;gap:9px}
+  .rd-lab{font-family:var(--mono);font-size:10.5px;color:var(--warn);border:1px solid #3d3324;border-radius:4px;padding:1px 7px}
+
   /* PhishTank watch */
   .pt{padding:14px 16px;border:1px solid var(--line);border-left-width:3px;border-radius:8px;margin-bottom:10px;background:var(--panel)}
   .pt.watching{border-left-color:var(--accent)} .pt.found{border-left-color:var(--ok)}
@@ -322,6 +331,11 @@
       <div class="card c-teal"><h2>Decloak</h2><div class="body" id="decloak"></div></div>
       <div class="card c-blue"><h2>Network · routing</h2><div class="body" id="network"></div></div>
       <div class="card c-violet"><h2>IOCs</h2><div class="body" id="iocs"></div></div>
+    </div>
+
+    <div class="card c-teal" id="redirectcard" style="display:none">
+      <h2>Redirect chain <span id="rdcount"></span></h2>
+      <div class="body" id="redirects"></div>
     </div>
 
     <div class="card c-blue">
@@ -535,6 +549,21 @@ function render(rep){
   $('#console').innerHTML=(rep.narration||[]).map(l=>{
     const cls=/TELEGRAM/.test(l)?'telln':/OFF-SITE|FILLED|filled|POSTs/.test(l)?'warnln':'';
     return `<div class="${cls}">${esc(l)}</div>`; }).join('');
+
+  // redirect chain (link -> link -> final point)
+  const redir=rep.redirects||[]; const rc=$('#redirectcard');
+  if(rc){
+    if(redir.length>1){
+      rc.style.display=''; $('#rdcount').textContent=redir.length+' hop'+(redir.length===1?'':'s');
+      const edge=h=> h.via==='http'&&h.status ? ('HTTP '+h.status+(h.status>=300&&h.status<400?' redirect':'')) : (h.via==='page'?'browser nav':'');
+      $('#redirects').innerHTML=redir.slice(0,14).map((h,i)=>{
+        let hn=h.url,pa='';try{const u=new URL(h.url);hn=u.host;pa=(u.pathname+u.search)||'/';}catch(e){}
+        const cls='rd-node'+(i===0?' start':'')+(i===redir.length-1?' end':'');
+        const arrow=(i<redir.length-1)?`<div class="rd-arrow">↓<span class="rd-lab">${esc(edge(h)||'→')}</span></div>`:'';
+        return `<div class="${cls}"><div class="rd-h">${esc(hn)}</div>${pa?`<div class="rd-p">${esc(pa)}</div>`:''}</div>${arrow}`;
+      }).join('')+(redir.length>14?`<div class="empty-note">+${redir.length-14} more hop(s)…</div>`:'');
+    } else { rc.style.display='none'; }
+  }
 
   // timeline
   const tl=$('#timeline'); tl.innerHTML='';
@@ -771,7 +800,9 @@ function ptRenderInline(w){
   const el=$('#pt-inline'); if(!el) return;
   if(w.state==='found'&&w.detail_url){
     const msg=ptMsg(w.url,w.detail_url), wa=`https://wa.me/?text=${encodeURIComponent(msg)}`;
-    el.innerHTML=`<div class="detail">🎣 <a href="${esc(w.detail_url)}" target="_blank">${esc(w.detail_url)}</a></div>`+
+    const cl={exact:['exact match','var(--ok)'],host:['same host','var(--ok)'],domain:['same domain — verify','var(--warn)'],checkurl:['via checkurl','var(--ok)']}[w.confidence]||[w.confidence||'',''];
+    const match=w.matched_url?`<div class="pt-meta">matched PhishTank entry: <span style="color:var(--muted)">${esc(w.matched_url)}</span>${w.submitted?` · submitted ${esc(w.submitted)}`:''}${cl[0]?` · <b style="color:${cl[1]}">${esc(cl[0])}</b>`:''}</div>`:'';
+    el.innerHTML=`<div class="detail">🎣 <a href="${esc(w.detail_url)}" target="_blank">${esc(w.detail_url)}</a></div>`+match+
       `<div class="pt-acts">`+
         `<button class="cbtn rep" onclick="copyText(this,'${jsq(w.detail_url)}')">Copy link</button>`+
         `<button class="cbtn" onclick="copyText(this,'${jsq(msg)}')">Copy for WhatsApp</button>`+

@@ -24,6 +24,8 @@ import time
 import uuid
 from io import BytesIO
 
+import httpx
+
 from . import enrich as E
 from . import extract as X
 from . import indicators as I
@@ -86,6 +88,29 @@ for(var i=0;i<els.length;i++){var e=els[i],t=(e.innerText||e.value||e.textConten
  if(t&&rx.test(t)&&e.offsetParent!==null){e.click();return t.slice(0,50);}}
 return null;
 """
+
+
+_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0"
+
+
+def _urlkey(u: str) -> str:
+    return (u or "").split("#")[0].rstrip("/").lower()
+
+
+async def _http_redirect_chain(url: str) -> list[dict]:
+    """Server-side HTTP redirect chain (the 3xx hops) via httpx.history — from the entry URL to the
+    final landing page, with each hop's status code."""
+    hops = []
+    try:
+        async with httpx.AsyncClient(verify=False, follow_redirects=True, timeout=15,
+                                     headers={"User-Agent": _UA}) as c:
+            r = await c.get(url)
+            for resp in r.history:
+                hops.append({"url": str(resp.url), "status": resp.status_code, "via": "http"})
+            hops.append({"url": str(r.url), "status": r.status_code, "via": "final"})
+    except Exception:
+        pass
+    return hops
 
 
 def _to_jpeg(png, q=72):
@@ -451,6 +476,33 @@ class SBSession:
         except Exception:
             self.report["kit"] = {}
 
+    def _redirect_graph(self):
+        """Build the redirect chain (link → link → final): server-side HTTP 3xx hops + the distinct
+        pages the browser actually walked through (JS/meta redirects + multi-step flow)."""
+        try:
+            http_hops = asyncio.run(_http_redirect_chain(self.url))
+        except Exception:
+            http_hops = []
+        hops: list[dict] = []
+
+        def _add(url, status=None, via="page"):
+            if not url:
+                return
+            if hops and _urlkey(hops[-1]["url"]) == _urlkey(url):
+                if status and not hops[-1].get("status"):
+                    hops[-1]["status"] = status
+                return
+            hops.append({"url": url, "status": status, "via": via})
+
+        for h in http_hops:
+            _add(h["url"], h.get("status"), h.get("via"))
+        for st in self.report.get("steps", []):
+            if st.get("url"):
+                _add(st["url"], None, "page")
+        if len(hops) > 1:
+            hops[-1]["via"] = "final"
+        self.report["redirects"] = hops
+
     def _finalize_iocs(self):
         joined = "\n".join(self._html_parts)
         try:
@@ -495,6 +547,7 @@ class SBSession:
                     self.report["decloak"].setdefault("victim", {})["url"] = victim_url
                 self._finalize_iocs()
             self._sb = None
+            self._redirect_graph()
             self._log("Enriching — domain age, hosting, blocklists…")
             self._enrich()
             self._log("Hunting the phishing kit (open dir / archive / source / cred logs)…")
