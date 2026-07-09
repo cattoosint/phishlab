@@ -60,11 +60,29 @@ async def solve(url: str, timeout: int | None = None) -> dict:
             pass
 
 
+def _kill_tree(pid: int) -> None:
+    """Kill the solver process AND its Chrome/chromedriver grandchildren (subprocess.run's timeout only
+    reaps the direct child, leaving zombie browsers)."""
+    try:
+        if sys.platform == "win32":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+        else:
+            import signal
+            os.kill(pid, signal.SIGKILL)
+    except Exception:
+        pass
+
+
 def _run_subprocess(url: str, out: str, timeout: int) -> int:
     env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
-    p = subprocess.run([sys.executable, _HERE, url, out],
-                       capture_output=True, text=True, timeout=timeout, env=env)
-    return p.returncode
+    p = subprocess.Popen([sys.executable, _HERE, url, out], env=env,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        return p.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_tree(p.pid)                        # reap the whole tree (chrome.exe grandchildren) on hang
+        raise
 
 
 # ── subprocess entry point — self-contained (seleniumbase + stdlib only) ─────────

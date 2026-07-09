@@ -398,6 +398,7 @@ async function detonate(){
   const url = $('#url').value.trim();
   if(!url) return;
   if(_poll){ clearInterval(_poll); _poll=null; } _sid=null;   // stop any prior live session cleanly
+  ptReset();                                                  // stop any prior PhishTank watch poll
   $('#go').disabled=true; $('#cancelbtn').style.display='none'; $('#out').className=''; clearStatus();
   $('#live').className='live on'; $('#lconsole').innerHTML=''; $('#limg').removeAttribute('src');
   renderNative(null); $('#lstage').style.display='';   // clear any prior report copy-panel
@@ -575,7 +576,7 @@ function render(rep){
   }
 
   // redirect chain (link -> link -> final point)
-  const redir=rep.redirects||[]; const rc=$('#redirectcard');
+  const redir=(rep.redirects||[]).filter(h=>h&&h.url); const rc=$('#redirectcard');
   if(rc){
     if(redir.length>1){
       rc.style.display=''; $('#rdcount').textContent=redir.length+' hop'+(redir.length===1?'':'s');

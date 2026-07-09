@@ -383,7 +383,10 @@ async def analyze(url: str) -> dict:
     tasks = [wildcard_dns_probe(host, cdn)]
     cert_det = None
     if scheme == "https" and not _is_ip(host):
-        cert_det = await asyncio.to_thread(_cert_details, host, port)
+        try:                                      # never let a hostile cert suppress all AiTM detection
+            cert_det = await asyncio.to_thread(_cert_details, host, port)
+        except Exception:
+            cert_det = None
         tasks += [timing_probe(host, port, cdn)]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 

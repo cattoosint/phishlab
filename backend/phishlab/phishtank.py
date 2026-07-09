@@ -26,7 +26,9 @@ USER_DEFAULT = os.getenv("PHISH_PHISHTANK_USER", "")
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0"
 
 WATCHES: dict[str, "Watch"] = {}
-WATCH_CAP = 40
+WATCH_CAP = 40           # retained finished watches
+RUN_CAP = 25             # concurrent RUNNING watches (protects the reporter's PhishTank rate limit)
+MAX_HOURS = 6.0          # hard ceiling on a watch's lifetime
 
 
 def _norm(url: str) -> str:
@@ -38,7 +40,7 @@ def _norm(url: str) -> str:
 
 def _split(u: str) -> tuple[str, str]:
     """(host_without_www, path) — lowercased, scheme/trailing-slash/'…'-truncation stripped."""
-    u = (u or "").strip().rstrip(".").lower()
+    u = (u or "").strip().rstrip("….").lower()   # strip a truncation ellipsis (ASCII or U+2026) + dots
     u = re.sub(r"^https?://", "", u)
     u = re.sub(r"^www\.", "", u)
     if "/" in u:
@@ -47,6 +49,23 @@ def _split(u: str) -> tuple[str, str]:
     else:
         host, path = u, ""
     return host, path
+
+
+# multi-tenant / free-hosting platforms: a *.SUFFIX subdomain is a DIFFERENT tenant, so two hosts that
+# merely share one of these suffixes are NOT the same site — require an EXACT host match (no domain tier).
+# (These + raw IPs are the dominant phishing host classes, so domain-tier matching there = false positives.)
+_MULTITENANT = {
+    "pages.dev", "workers.dev", "web.app", "firebaseapp.com", "github.io", "gitlab.io", "netlify.app",
+    "glitch.me", "herokuapp.com", "blogspot.com", "wordpress.com", "weebly.com", "wixsite.com",
+    "wixstudio.com", "000webhostapp.com", "r2.dev", "mystagingwebsite.com", "myclickfunnels.com",
+    "godaddysites.com", "repl.co", "replit.app", "vercel.app", "onrender.com", "surge.sh", "translate.goog",
+    "azurewebsites.net", "cloudfront.net", "amazonaws.com", "googleapis.com", "sharepoint.com",
+    "myshopify.com", "square.site", "duckdns.org", "ngrok.app", "ngrok-free.app", "trycloudflare.com",
+}
+
+
+def _is_ip(host: str) -> bool:
+    return bool(re.match(r"^\d{1,3}(\.\d{1,3}){3}$", host or "")) or ":" in (host or "")
 
 
 def _reg(host: str) -> str:
@@ -61,8 +80,9 @@ def match_url(target: str, listed: str) -> str | None:
     """How confidently `listed` (a PhishTank entry, possibly truncated) is the SAME thing as `target`:
       'exact'  — same host + the path is a prefix either way (listing truncates long URLs)
       'host'   — same host, different path (same phishing host, likely the same incident)
-      'domain' — same registrable domain, different subdomain (weaker; verify)
-      None     — different registrable domain (e.g. dbs.com.sg vs dbs.com → NOT matched)
+      'domain' — same registrable domain, different subdomain (weaker; verify) — NEVER for raw IPs or
+                 multi-tenant/free-hosting suffixes, where a different subdomain is a different tenant
+      None     — different registrable domain (e.g. dbs.com.sg vs dbs.com), or a shared-suffix host mismatch
     Scheme / www / trailing-slash differences are ignored throughout."""
     th, tp = _split(target)
     lh, lp = _split(listed)
@@ -72,8 +92,11 @@ def match_url(target: str, listed: str) -> str | None:
         if not lp or not tp or tp.startswith(lp) or lp.startswith(tp):
             return "exact"
         return "host"
+    # domain tier: only for genuine registrable domains — never raw IPs or multi-tenant suffixes
+    if _is_ip(th) or _is_ip(lh):
+        return None
     tr, lr = _reg(th), _reg(lh)
-    if tr and tr == lr and "." in tr:
+    if tr and tr == lr and "." in tr and tr not in _MULTITENANT:
         return "domain"
     return None
 
@@ -92,7 +115,7 @@ def parse_user_page(html: str) -> list[dict]:
             continue
         pid = mid.group(1)
         murl = re.search(r'class="value">\s*(https?://[^\s<]+)', tr)
-        url = murl.group(1).rstrip(".") if murl else None      # trailing '…' truncation stripped
+        url = murl.group(1).rstrip("….") if murl else None     # trailing '…'/'.' truncation stripped
         sub = re.search(r"added on ([^<]+)", tr)
         online = None
         if re.search(r">\s*Online\s*<", tr, re.I) or "online.gif" in tr.lower():
@@ -122,7 +145,7 @@ async def check_url(url: str) -> dict | None:
     if key:
         data["app_key"] = key
     try:
-        async with httpx.AsyncClient(timeout=20, headers={"User-Agent": f"phishtank/{key or 'phishlab'}"}) as c:
+        async with httpx.AsyncClient(timeout=20, headers={"User-Agent": "phishtank/phishlab"}) as c:  # key stays in the POST body only
             r = await c.post("https://checkurl.phishtank.com/checkurl/", data=data)
             if r.status_code == 200 and "json" in (r.headers.get("content-type") or ""):
                 res = (r.json().get("results") or {})
@@ -221,6 +244,11 @@ def _evict():
 
 
 def start_watch(url: str, username: str | None = None, interval: int = 30, max_hours: float = 2) -> Watch:
+    interval = min(3600, max(20, int(interval or 30)))
+    max_hours = min(MAX_HOURS, max(0.05, float(max_hours or 2)))
+    running = [w for w in WATCHES.values() if w.state == "watching"]
+    if len(running) >= RUN_CAP:                  # bound concurrent pollers → don't hammer PhishTank
+        stop_watch(min(running, key=lambda w: w.started).id)
     w = Watch(_norm(url), (username or USER_DEFAULT).strip(), interval, int(max_hours * 3600))
     WATCHES[w.id] = w
     _evict()

@@ -30,6 +30,7 @@ from . import enrich as E
 from . import extract as X
 from . import indicators as I
 from . import kit as K
+from . import net_guard as G
 from . import session as _sess
 from . import tracker as T
 from .sandbox import _host, _merge_ip, _verdict
@@ -97,17 +98,28 @@ def _urlkey(u: str) -> str:
     return (u or "").split("#")[0].rstrip("/").lower()
 
 
-async def _http_redirect_chain(url: str) -> list[dict]:
-    """Server-side HTTP redirect chain (the 3xx hops) via httpx.history — from the entry URL to the
-    final landing page, with each hop's status code."""
+async def _http_redirect_chain(url: str, max_hops: int = 10) -> list[dict]:
+    """Server-side HTTP redirect chain (the 3xx hops) from the entry URL to the final landing page, with
+    each hop's status code. Follows redirects MANUALLY and re-checks net_guard on every hop so a phish
+    can't steer this server-side fetch to an internal/metadata host (SSRF)."""
     hops = []
     try:
-        async with httpx.AsyncClient(verify=False, follow_redirects=True, timeout=15,
+        async with httpx.AsyncClient(verify=False, follow_redirects=False, timeout=15,
                                      headers={"User-Agent": _UA}) as c:
-            r = await c.get(url)
-            for resp in r.history:
-                hops.append({"url": str(resp.url), "status": resp.status_code, "via": "http"})
-            hops.append({"url": str(r.url), "status": r.status_code, "via": "final"})
+            cur = url
+            for _ in range(max_hops):
+                ok, _why = G.check_target(cur)
+                if not ok:
+                    hops.append({"url": cur, "status": None, "via": "blocked (non-public host)"})
+                    break
+                r = await c.get(cur)
+                loc = r.headers.get("location")
+                if 300 <= r.status_code < 400 and loc:
+                    hops.append({"url": cur, "status": r.status_code, "via": "http"})
+                    cur = str(httpx.URL(cur).join(loc))
+                    continue
+                hops.append({"url": cur, "status": r.status_code, "via": "final"})
+                break
     except Exception:
         pass
     return hops
@@ -391,8 +403,10 @@ class SBSession:
                 self.report["cf_solving"] = True
                 self._log("Cloudflare challenge/warning — solving (real-mouse Turnstile if needed). "
                           "DO NOT touch your mouse/keyboard (~30-60s).")
-                ok = self._solve_cf(sb)
-                self.report["cf_solving"] = False
+                try:
+                    ok = self._solve_cf(sb)
+                finally:
+                    self.report["cf_solving"] = False   # never leave the 'don't touch mouse' banner stuck
                 if ok:
                     self.report["cf_warning_cleared"] = True
                     self.report["cloudflare_bypass"] = {"solved": True, "via": "seleniumbase"}
@@ -545,13 +559,23 @@ class SBSession:
                     victim_url = self.url
                 if isinstance(self.report.get("decloak"), dict):
                     self.report["decloak"].setdefault("victim", {})["url"] = victim_url
+                # SSRF guard: the walk may have been steered (redirect/click) to an internal host; the kit
+                # hunt re-fetches this URL server-side + stores bodies, so only chase a PUBLIC target.
+                kit_target = victim_url
+                try:
+                    ok, _why = G.check_target(victim_url)
+                except Exception:
+                    ok = False
+                if not ok:
+                    kit_target = self.url
+                    self._log("  (reached host isn't public — kit hunt uses the original URL, not the redirected one)")
                 self._finalize_iocs()
             self._sb = None
             self._redirect_graph()
             self._log("Enriching — domain age, hosting, blocklists…")
             self._enrich()
             self._log("Hunting the phishing kit (open dir / archive / source / cred logs)…")
-            self._kit(victim_url)
+            self._kit(kit_target)
             self.report["verdict"] = _verdict(self.report)
             self.report["elapsed"] = round(time.time() - t0, 1)
             self.state = "done"
@@ -571,7 +595,8 @@ class SBSession:
 
 def create(url: str) -> SBSession:
     s = SBSession(url)
-    _sess.SESSIONS[s.id] = s                 # register so session.get()/api see it
+    with _sess.SESSIONS_LOCK:                 # register so session.get()/api see it (thread-safe)
+        _sess.SESSIONS[s.id] = s
     s._thread = threading.Thread(target=s.run, name=f"sb-{s.id}", daemon=True)
     s._thread.start()
     return s

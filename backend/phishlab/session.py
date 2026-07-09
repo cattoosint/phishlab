@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import threading
 import time
 import uuid
 from urllib.parse import quote, urlsplit
@@ -28,6 +29,10 @@ FRAME_INTERVAL = 0.4      # ~2.5 fps live view
 FRAME_QUALITY = 66
 
 SESSIONS: dict[str, "Session"] = {}
+# SESSIONS is mutated from BOTH the event-loop thread (Camoufox create/get) and SeleniumBase worker
+# threads (sb_session create + _evict in their finally) — guard every mutation/iteration with this lock
+# to avoid "dictionary changed size during iteration".
+SESSIONS_LOCK = threading.Lock()
 CASES_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "cases")
 SESSION_CAP = int(os.getenv("PHISH_SESSION_CAP") or "50")   # sessions kept in RAM; older done ones evict to disk
 
@@ -62,12 +67,13 @@ def _jpeg_dims(data: bytes):
 
 def _evict() -> None:
     """Bound RAM: drop the oldest done/error sessions from memory (their report is on disk)."""
-    if len(SESSIONS) <= SESSION_CAP:
-        return
-    done = sorted((s for s in SESSIONS.values() if s.state in ("done", "error", "cancelled")),
-                  key=lambda s: (s.report.get("started_at") or 0))
-    for s in done[:len(SESSIONS) - SESSION_CAP]:
-        SESSIONS.pop(s.id, None)
+    with SESSIONS_LOCK:
+        if len(SESSIONS) <= SESSION_CAP:
+            return
+        done = sorted((s for s in list(SESSIONS.values()) if s.state in ("done", "error", "cancelled")),
+                      key=lambda s: (s.report.get("started_at") or 0))
+        for s in done[:len(SESSIONS) - SESSION_CAP]:
+            SESSIONS.pop(s.id, None)
 
 
 class _Done:
@@ -669,7 +675,8 @@ class Session:
 
 def create(url: str) -> Session:
     s = Session(url)
-    SESSIONS[s.id] = s
+    with SESSIONS_LOCK:
+        SESSIONS[s.id] = s
     s._task = asyncio.create_task(s.run())
     return s
 
@@ -839,7 +846,8 @@ class ReportSession(Session):
 
 def create_report(url: str, target: str, detail: str | None = None) -> "ReportSession":
     s = ReportSession(url, target, detail)
-    SESSIONS[s.id] = s
+    with SESSIONS_LOCK:
+        SESSIONS[s.id] = s
     s._task = asyncio.create_task(s.run())
     return s
 
