@@ -35,7 +35,7 @@ the phishing kit where exposed, and helps you report it for takedown.
 ## Install & run (Windows)
 
 ```
-1.  Install.bat      (one-time setup: environment, dependencies, browsers)
+1.  Install.bat      (one-time setup: environment, dependencies, browsers, Tor)
 2.  PhishLab.bat     (starts the console)   ->   http://127.0.0.1:8090
 ```
 
@@ -48,8 +48,9 @@ use the **Camoufox** (real-fingerprint Firefox) engine instead — kept as a pro
 
 ## Configuration (optional)
 
-All configuration is via environment variables (or a local `backend/.env`, which is **gitignored and
-must never be committed**). Everything works out of the box without any of these:
+All configuration is via environment variables (or a local `.env` file — drop it in the **PhishLab
+folder or `backend/`** and it's auto-detected; it's **gitignored and must never be committed**).
+Everything works out of the box without any of these:
 
 - `PHISH_ENGINE` — `seleniumbase` (default) or `camoufox`
 - `PHISH_TRACK_VANTAGES` / `PHISH_NORD_SERVERS` — extra decloak vantages (e.g. Tor / VPN exits)

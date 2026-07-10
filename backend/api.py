@@ -28,23 +28,26 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
 def _load_dotenv() -> None:
-    """Minimal .env loader (no dep) — backend/.env holds secrets like NordVPN creds; gitignored."""
-    p = Path(__file__).parent / ".env"
-    if not p.exists():
-        return
-    text = ""
-    for enc in ("utf-8-sig", "utf-16", "utf-8", "latin-1"):
-        try:
-            text = p.read_text(encoding=enc)
-            break
-        except Exception:
+    """Minimal .env loader (no dep) — holds optional secrets like NordVPN creds / API keys; gitignored.
+    Drop a `.env` in EITHER the PhishLab root folder OR backend/ and it's picked up automatically
+    (backend/.env wins on conflicts; real OS env vars still win over both, via setdefault)."""
+    here = Path(__file__).parent
+    for p in (here / ".env", here.parent / ".env"):    # backend/.env first, then the repo-root .env
+        if not p.exists():
             continue
-    for line in text.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        k, v = line.split("=", 1)
-        os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+        text = ""
+        for enc in ("utf-8-sig", "utf-16", "utf-8", "latin-1"):
+            try:
+                text = p.read_text(encoding=enc)
+                break
+            except Exception:
+                continue
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
 
 
 _load_dotenv()

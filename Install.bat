@@ -52,6 +52,22 @@ echo   [..] Downloading the anti-bot browser ^(Camoufox^) ...
 python -m camoufox fetch || echo   [!] Camoufox fetch hiccup - retry later: python -m camoufox fetch
 echo.
 
+REM --- Tor (optional: a 2nd decloak vantage for the multi-vantage cloaking check) ---
+if exist "tor\tor\tor.exe" (
+  echo   [OK] Tor already present
+) else (
+  echo   [..] Downloading Tor ^(2nd decloak vantage; ~20 MB, optional^) ...
+  if not exist "tor" mkdir tor
+  powershell -NoProfile -Command "try { [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing -Uri 'https://archive.torproject.org/tor-package-archive/torbrowser/14.5.1/tor-expert-bundle-windows-x86_64-14.5.1.tar.gz' -OutFile 'tor\teb.tar.gz' } catch { exit 1 }"
+  if exist "tor\teb.tar.gz" (
+    tar -xzf "tor\teb.tar.gz" -C "tor" && del "tor\teb.tar.gz" >nul 2>nul
+    if exist "tor\tor\tor.exe" ( echo   [OK] Tor installed ) else ( echo   [!] Tor extract failed - decloak will run without the Tor vantage ^(non-fatal^) )
+  ) else (
+    echo   [!] Tor download failed - decloak will run without the Tor vantage ^(non-fatal^)
+  )
+)
+echo.
+
 REM --- Chrome (needed by the default SeleniumBase engine for Cloudflare solving) ---
 set "CHROME="
 if exist "%ProgramFiles%\Google\Chrome\Application\chrome.exe" set "CHROME=1"
