@@ -160,6 +160,7 @@ class SBSession:
         self._cancel = threading.Event()
         self._html_parts: list[str] = []
         self._sb = None
+        self._main_handle = None
         self._thread: threading.Thread | None = None
 
     # ── public surface (mirrors session.Session) ──
@@ -357,6 +358,30 @@ class SBSession:
         except Exception:
             return False
 
+    def _close_extra_tabs(self, sb):
+        """Close any popup/OAuth/new tab the walk spawned (e.g. a 'Sign in with Google' button or a
+        target=_blank link) so only the detonation tab remains — stops stray Google/login tabs piling up."""
+        try:
+            d = sb.driver
+            handles = d.window_handles
+            if len(handles) <= 1:
+                return
+            main = self._main_handle if self._main_handle in handles else handles[0]
+            for h in handles:
+                if h == main:
+                    continue
+                try:
+                    d.switch_to.window(h)
+                    d.close()
+                except Exception:
+                    pass
+            try:
+                d.switch_to.window(main)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
     # ── the detonation walk ──
     def _walk(self, sb):
         seen_fill: set[str] = set()
@@ -366,6 +391,7 @@ class SBSession:
         for i in range(MAX_STEPS):
             if self._cancel.is_set():
                 break
+            self._close_extra_tabs(sb)          # reap any OAuth/popup tab the previous step spawned
             st, html = self._capture_step(sb, "load", i)
 
             # Chrome cert-error / SafeBrowsing interstitial → power through it (bad certs are the norm here)
@@ -554,6 +580,10 @@ class SBSession:
                     except Exception:
                         self._log("(page slow to load — continuing with whatever rendered)")
                 self._wait(sb, 2)
+                try:
+                    self._main_handle = sb.driver.current_window_handle
+                except Exception:
+                    self._main_handle = None
                 self._walk(sb)
                 # point the report's victim view + kit-hunt at the reached (real) phish
                 try:
