@@ -15,6 +15,7 @@ ordinary Cloudflare-fronted legit sites do not flag.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import re
 import secrets
 import socket
@@ -85,6 +86,36 @@ def _is_cdn(headers: dict) -> str | None:
     return None
 
 
+# Cloudflare's published IPv4 ranges — a domain fronted by CF wildcard-resolves EVERY subdomain to a CF
+# IP (legitimately), which would otherwise look like Evilginx's catch-all DNS. Skip the wildcard tell for
+# these even when header-based CDN detection missed it (e.g. on a takedown/advisory response).
+_CF_NETS = [ipaddress.ip_network(c) for c in (
+    "173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22", "141.101.64.0/18",
+    "108.162.192.0/18", "190.93.240.0/20", "188.114.96.0/20", "197.234.240.0/22", "198.41.128.0/17",
+    "162.158.0.0/15", "104.16.0.0/13", "104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22")]
+
+
+def _is_cf_ip(ip: str) -> bool:
+    try:
+        a = ipaddress.ip_address(ip)
+        return any(a in n for n in _CF_NETS)
+    except Exception:
+        return False
+
+
+# A blocklist/takedown/advisory/warning page served in place of the phish (Cloudflare "Suspected
+# Phishing", a Singapore-Police "Advisory - Suspected Scam"/go.gov.sg seizure, ScamShield, etc.) is NOT
+# a live reverse-proxy kit — never attribute AiTM/toolkit tells to it.
+_ADVISORY = ("suspected scam", "advisory - suspected", "reported for potential phishing",
+             "this website has been reported", "suspected phishing", "go.gov.sg", "scamshield",
+             "has been seized", "has been taken down", "this domain has been", "singapore police")
+
+
+def _is_advisory(html: str, title: str) -> bool:
+    blob = ((title or "") + " " + (html or "")[:6000]).lower()
+    return any(m in blob for m in _ADVISORY)
+
+
 async def wildcard_dns_probe(host: str, cdn: str | None) -> dict | None:
     """Evilginx runs its own authoritative DNS that wildcard-resolves EVERY subdomain to the phishing IP
     (its lures live on arbitrary subdomains). If a random never-registered subdomain resolves to the same
@@ -97,6 +128,8 @@ async def wildcard_dns_probe(host: str, cdn: str | None) -> dict | None:
     apex_ips, probe_ips = await asyncio.gather(_resolve(apex), _resolve(probe))
     shared = apex_ips & probe_ips
     if apex_ips and probe_ips and shared:
+        if all(_is_cf_ip(ip) for ip in shared):   # Cloudflare wildcards every subdomain — not Evilginx
+            return None
         return {"name": "evilginx_wildcard_dns", "toolkit": "Evilginx", "score": 40, "tier": "dns",
                 "evidence": f"random {probe} -> {sorted(shared)[0]} (== apex IP): catch-all DNS"}
     return None
@@ -380,13 +413,21 @@ async def analyze(url: str) -> dict:
     cdn = _is_cdn(headers)
     brand = _claimed_brand(html, title)
 
-    tasks = [wildcard_dns_probe(host, cdn)]
     cert_det = None
     if scheme == "https" and not _is_ip(host):
         try:                                      # never let a hostile cert suppress all AiTM detection
             cert_det = await asyncio.to_thread(_cert_details, host, port)
         except Exception:
             cert_det = None
+
+    # a takedown / advisory / block page served IN PLACE of the phish (SPF seizure, Cloudflare "Suspected
+    # Phishing", ScamShield…) is not a live reverse-proxy kit → return no AiTM signals for it
+    if _is_advisory(html, title):
+        return {"signals": [], "toolkit": None, "brand": brand, "aitm_score": 0, "cdn": cdn,
+                "cert": cert_det, "advisory": True}
+
+    tasks = [wildcard_dns_probe(host, cdn)]
+    if scheme == "https" and not _is_ip(host):
         tasks += [timing_probe(host, port, cdn)]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
