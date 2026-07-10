@@ -241,6 +241,7 @@
   .graph-legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:9px;padding:0 4px}
   .g-leg{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--muted)}
   .g-leg i{width:10px;height:10px;border-radius:50%;display:inline-block}
+  .graph-note{color:var(--faint);font-size:11px;margin-top:7px;padding:0 4px}
 
   /* PhishTank watch */
   .pt{padding:14px 16px;border:1px solid var(--line);border-left-width:3px;border-radius:8px;margin-bottom:10px;background:var(--panel)}
@@ -343,6 +344,7 @@
       <div class="body" style="padding:8px 10px 10px">
         <svg id="graphsvg" class="graph-svg"></svg>
         <div class="graph-legend" id="graphlegend"></div>
+        <div class="graph-note" id="graphnote">Drag a node to rearrange · click a node to copy its URL</div>
       </div>
     </div>
 
@@ -534,27 +536,34 @@ const G_SKIP=/cloudflare|jsdelivr|googleapis|gstatic|googletagmanager|google-ana
 function _ghost(u){ try{ return new URL(u).host||u; }catch(e){ return String(u||'').slice(0,32); } }
 function buildGraph(rep){
   const nodes=[],edges=[],seen={};
-  const add=(id,label,type,r)=>{ if(!seen[id]){ seen[id]={id,label,type,r:r||13}; nodes.push(seen[id]); } return seen[id]; };
+  const add=(id,label,type,r,url)=>{ if(!seen[id]){ seen[id]={id,label,type,r:r||13,url:url||label}; nodes.push(seen[id]); } return seen[id]; };
   const redir=(rep.redirects||[]).filter(h=>h&&h.url); let prev=null,finalN=null;
   redir.forEach((h,i)=>{
     const type=i===0?'root':(i===redir.length-1?'final':'hop');
-    const n=add('n'+i,_ghost(h.url),type,i===0?18:13);
+    const n=add('n'+i,_ghost(h.url),type,i===0?18:13,h.url);   // node stores the FULL url (click to copy)
     if(prev){ const lbl=(prev.st>=300&&prev.st<400)?('HTTP '+prev.st):''; edges.push({from:prev.id,to:n.id,label:lbl}); }
     n.st=h.status; prev=n; finalN=n;
   });
-  if(!finalN && rep.url){ finalN=add('root',_ghost(rep.url),'root',18); }
+  if(!finalN && rep.url){ finalN=add('root',_ghost(rep.url),'root',18,rep.url); }
   const specHost=finalN?finalN.label:'';
-  // credentials posted
+  // credentials posted (copy the full form-action)
   [...new Set((rep.steps||[]).filter(s=>s.action==='fill+submit').map(s=>s.creds_sent_to).filter(Boolean))]
-    .forEach((a,i)=>{ const n=add('x'+i,_ghost(a),'exfil',13); if(finalN)edges.push({from:finalN.id,to:n.id,label:'creds'}); });
+    .forEach((a,i)=>{ const n=add('x'+i,_ghost(a),'exfil',13,a); if(finalN)edges.push({from:finalN.id,to:n.id,label:'creds'}); });
   // AiTM reverse-proxy relay backends
-  ((rep.network||{}).relay_to||[]).forEach((h,i)=>{ const n=add('r'+i,h,'exfil',13); if(finalN)edges.push({from:finalN.id,to:n.id,label:'AiTM relay'}); });
-  // Telegram exfil bots
-  ((rep.exfil||{}).telegram||[]).forEach((t,i)=>{ const n=add('tg'+i,'TG '+String(t.bot_id||''),'telegram',13); if(finalN)edges.push({from:finalN.id,to:n.id,label:'exfil'}); });
+  ((rep.network||{}).relay_to||[]).forEach((h,i)=>{ const n=add('r'+i,h,'exfil',13,h); if(finalN)edges.push({from:finalN.id,to:n.id,label:'AiTM relay'}); });
+  // Telegram exfil bots (copy the bot id)
+  ((rep.exfil||{}).telegram||[]).forEach((t,i)=>{ const n=add('tg'+i,'TG '+String(t.bot_id||''),'telegram',13,String(t.bot_id||'')); if(finalN)edges.push({from:finalN.id,to:n.id,label:'exfil'}); });
   // off-host IOC domains (skip the specimen host + common CDN/analytics noise)
   [...new Set(((rep.iocs||{}).domains||[]).filter(d=>d && d!==specHost && !G_SKIP.test(d)))].slice(0,8)
-    .forEach((d,i)=>{ const n=add('io'+i,d,'ioc',11); if(finalN)edges.push({from:finalN.id,to:n.id,label:''}); });
+    .forEach((d,i)=>{ const n=add('io'+i,d,'ioc',11,d); if(finalN)edges.push({from:finalN.id,to:n.id,label:''}); });
   return {nodes,edges};
+}
+// click a node (vs drag) → copy its URL, with a brief note flash
+function _gcopy(node){
+  const val=node&&(node.url||node.label)||''; if(!val) return;
+  const flash=()=>{ const n=$('#graphnote'); if(n){ n.dataset.o=n.dataset.o||n.textContent; n.textContent='copied ✓  '+(node.label||''); n.style.color='var(--ok)'; clearTimeout(_gcopy._t); _gcopy._t=setTimeout(()=>{ n.textContent=n.dataset.o; n.style.color=''; },1600); } };
+  if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(val).then(flash).catch(()=>_fbCopy(val,flash)); }
+  else _fbCopy(val,flash);
 }
 function _gpt(ev){ const r=GRAPH.svg.getBoundingClientRect(); return {x:(ev.clientX-r.left)/r.width*GRAPH.W, y:(ev.clientY-r.top)/r.height*GRAPH.H}; }
 function _gstep(){
@@ -587,9 +596,10 @@ function renderGraph(rep){
     +nodes.map((n,i)=>`<g class="g-node" data-n="${i}"><circle r="${n.r}" fill="${G_COL[n.type]||'#888'}"></circle><text class="g-lab" dy="${n.r+13}">${esc(n.label)}</text></g>`).join('');
   const present=new Set(nodes.map(n=>n.type));
   $('#graphlegend').innerHTML=Object.entries({root:'specimen',hop:'redirect',final:'landing',exfil:'creds go here',telegram:'telegram exfil',ioc:'off-host IOC'}).filter(([k])=>present.has(k)).map(([k,v])=>`<span class="g-leg"><i style="background:${G_COL[k]}"></i>${v}</span>`).join('');
-  svg.querySelectorAll('.g-node').forEach(el=>{ el.addEventListener('mousedown',ev=>{ ev.preventDefault(); GRAPH.drag=nodes[+el.dataset.n]; if(!GRAPH.raf) GRAPH.raf=requestAnimationFrame(_gtick); }); });
-  svg.onmousemove=ev=>{ if(GRAPH.drag){ const p=_gpt(ev); GRAPH.drag.x=p.x; GRAPH.drag.y=p.y; } };
-  svg.onmouseup=svg.onmouseleave=()=>{ GRAPH.drag=null; };
+  svg.querySelectorAll('.g-node').forEach(el=>{ el.addEventListener('mousedown',ev=>{ ev.preventDefault(); GRAPH.drag=nodes[+el.dataset.n]; GRAPH._downXY=[ev.clientX,ev.clientY]; GRAPH._moved=false; if(!GRAPH.raf) GRAPH.raf=requestAnimationFrame(_gtick); }); });
+  svg.onmousemove=ev=>{ if(GRAPH.drag){ if(GRAPH._downXY){ const dx=ev.clientX-GRAPH._downXY[0],dy=ev.clientY-GRAPH._downXY[1]; if(dx*dx+dy*dy>16) GRAPH._moved=true; } const p=_gpt(ev); GRAPH.drag.x=p.x; GRAPH.drag.y=p.y; } };
+  svg.onmouseup=()=>{ if(GRAPH.drag&&!GRAPH._moved) _gcopy(GRAPH.drag); GRAPH.drag=null; };   // a click (no drag) copies the node's URL
+  svg.onmouseleave=()=>{ GRAPH.drag=null; };
   GRAPH.raf=requestAnimationFrame(_gtick);
 }
 
