@@ -230,7 +230,7 @@
   #lb.on{display:flex} #lb img{max-width:100%;max-height:100%;border:1px solid var(--line);border-radius:6px}
 
   /* SpiderFoot-style force-directed detonation graph */
-  .graph-svg{width:100%;height:360px;display:block;background:#0a0d11;border:1px solid var(--line);border-radius:8px;cursor:grab;user-select:none}
+  .graph-svg{width:100%;height:460px;display:block;background:#0a0d11;border:1px solid var(--line);border-radius:8px;cursor:grab;user-select:none}
   .graph-svg:active{cursor:grabbing}
   .g-edge{stroke:#2b3540;stroke-width:1.4}
   .g-elab{fill:var(--faint);font-family:var(--mono);font-size:9.5px;text-anchor:middle;pointer-events:none}
@@ -528,7 +528,7 @@ function verdictClass(label,score){ if(score>=45||label==='confirmed_phishing'||
   if(score>=20||label==='suspicious') return 'v-warn'; return 'v-ok'; }
 
 // ── SpiderFoot-style force-directed detonation graph (self-contained; no external lib) ──
-const GRAPH={raf:null,nodes:[],edges:[],idx:{},svg:null,drag:null,W:880,H:360};
+const GRAPH={raf:null,nodes:[],edges:[],idx:{},svg:null,drag:null,W:880,H:460};
 const G_COL={root:'#4a9eda',hop:'#939ea8',final:'#3fb27f',exfil:'#d95f57',telegram:'#d072b0',ioc:'#9b8cf0'};
 const G_SKIP=/cloudflare|jsdelivr|googleapis|gstatic|googletagmanager|google-analytics|fonts\.|cdnjs|bootstrapcdn|w3\.org|schema\.org|akamai|jquery|cloudflareinsights/i;
 function _ghost(u){ try{ return new URL(u).host||u; }catch(e){ return String(u||'').slice(0,32); } }
@@ -559,8 +559,8 @@ function buildGraph(rep){
 function _gpt(ev){ const r=GRAPH.svg.getBoundingClientRect(); return {x:(ev.clientX-r.left)/r.width*GRAPH.W, y:(ev.clientY-r.top)/r.height*GRAPH.H}; }
 function _gstep(){
   const {nodes,edges,idx,W,H}=GRAPH; let ke=0;
-  for(let i=0;i<nodes.length;i++)for(let j=i+1;j<nodes.length;j++){ const a=nodes[i],b=nodes[j]; let dx=a.x-b.x,dy=a.y-b.y,d2=dx*dx+dy*dy||1,d=Math.sqrt(d2); const f=3000/d2,fx=f*dx/d,fy=f*dy/d; a.vx+=fx;a.vy+=fy;b.vx-=fx;b.vy-=fy; }
-  edges.forEach(e=>{ const a=idx[e.from],b=idx[e.to]; if(!a||!b)return; let dx=b.x-a.x,dy=b.y-a.y,d=Math.sqrt(dx*dx+dy*dy)||1; const f=(d-100)*0.02,fx=f*dx/d,fy=f*dy/d; a.vx+=fx;a.vy+=fy;b.vx-=fx;b.vy-=fy; });
+  for(let i=0;i<nodes.length;i++)for(let j=i+1;j<nodes.length;j++){ const a=nodes[i],b=nodes[j]; let dx=a.x-b.x,dy=a.y-b.y,d2=dx*dx+dy*dy||1,d=Math.sqrt(d2); const f=6500/d2,fx=f*dx/d,fy=f*dy/d; a.vx+=fx;a.vy+=fy;b.vx-=fx;b.vy-=fy; }
+  edges.forEach(e=>{ const a=idx[e.from],b=idx[e.to]; if(!a||!b)return; let dx=b.x-a.x,dy=b.y-a.y,d=Math.sqrt(dx*dx+dy*dy)||1; const f=(d-175)*0.02,fx=f*dx/d,fy=f*dy/d; a.vx+=fx;a.vy+=fy;b.vx-=fx;b.vy-=fy; });
   nodes.forEach(n=>{ n.vx+=(W/2-n.x)*0.008; n.vy+=(H/2-n.y)*0.008; n.vx*=0.85; n.vy*=0.85; if(n!==GRAPH.drag){ n.x+=n.vx; n.y+=n.vy; } n.x=Math.max(n.r+4,Math.min(W-n.r-4,n.x)); n.y=Math.max(n.r+4,Math.min(H-n.r-16,n.y)); ke+=n.vx*n.vx+n.vy*n.vy; });
   return ke;
 }
@@ -577,8 +577,8 @@ function renderGraph(rep){
   const {nodes,edges}=buildGraph(rep);
   if(nodes.length<1){ card.style.display='none'; return; }
   card.style.display=''; $('#rdcount').textContent=nodes.length+' node'+(nodes.length===1?'':'s')+' · '+edges.length+' edge'+(edges.length===1?'':'s');
-  const W=svg.clientWidth||880, H=360, idx={};
-  nodes.forEach((n,i)=>{ idx[n.id]=n; const a=2*Math.PI*i/nodes.length; n.x=W/2+Math.cos(a)*130; n.y=H/2+Math.sin(a)*95; n.vx=0;n.vy=0; });
+  const W=svg.clientWidth||880, H=460, idx={};   // canvas height matches .graph-svg
+  nodes.forEach((n,i)=>{ idx[n.id]=n; const a=2*Math.PI*i/nodes.length; n.x=W/2+Math.cos(a)*210; n.y=H/2+Math.sin(a)*150; n.vx=0;n.vy=0; });
   Object.assign(GRAPH,{nodes,edges,idx,svg,W,H,drag:null});
   svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
   svg.innerHTML=`<defs><marker id="arr" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6" fill="#3a4653"/></marker></defs>`
@@ -737,7 +737,7 @@ function render(rep){
           rp.innerHTML=`<div class="kv"><span class="k">report the URL to</span></div>`+
             `<ul class="list">${(d.targets||[]).map(x=>{
               const b=inapp.includes(x.key)?`<div style="margin-top:6px"><button class="cbtn rep" onclick="startReport('${x.key}','${esc(x.name).replace(/'/g,'')}')">report in-app ▶</button></div>`:'';
-              return `<li><a href="${esc(x.url)}" target="_blank">${esc(x.name)}</a> <span style="color:var(--faint)">— ${esc(x.note)}</span>${b}</li>`;
+              return `<li style="word-break:normal;overflow-wrap:break-word"><a href="${esc(x.url)}" target="_blank">${esc(x.name)}</a> <span style="color:var(--faint)">— ${esc(x.note)}</span>${b}</li>`;
             }).join('')}</ul>`+
             ptPromptHtml(rep.url);
         }).catch(()=>{});
@@ -882,14 +882,10 @@ function ptRenderInline(w){
   if(!$('#pt-inline')) return;
   let html;
   if(w.state==='found'&&w.detail_url){
-    const msg=ptMsg(w.url,w.detail_url), wa=`https://wa.me/?text=${encodeURIComponent(msg)}`;
     const cl={exact:['exact match','var(--ok)'],host:['same host','var(--ok)'],domain:['same domain — verify','var(--warn)'],checkurl:['via checkurl','var(--ok)']}[w.confidence]||[w.confidence||'',''];
     const match=w.matched_url?`<div class="pt-meta">matched PhishTank entry: <span style="color:var(--muted)">${esc(w.matched_url)}</span>${w.submitted?` · submitted ${esc(w.submitted)}`:''}${cl[0]?` · <b style="color:${cl[1]}">${esc(cl[0])}</b>`:''}</div>`:'';
     html=`<div class="detail">🎣 <a href="${esc(w.detail_url)}" target="_blank">${esc(w.detail_url)}</a></div>`+match+
-      `<div class="pt-acts">`+
-        `<button class="cbtn rep" onclick="copyText(this,'${jsq(w.detail_url)}')">Copy link</button>`+
-        `<button class="cbtn" onclick="copyText(this,'${jsq(msg)}')">Copy for WhatsApp</button>`+
-        `<a class="pt-wa" href="${esc(wa)}" target="_blank">Share to WhatsApp ▶</a></div>`;
+      `<div class="pt-acts"><button class="cbtn rep" onclick="copyText(this,'${jsq(w.detail_url)}')">Copy link</button></div>`;
   } else if(w.state==='watching'){
     // static text (no ticking counters) so the card doesn't visibly refresh while polling in the background
     html=`<div style="font-size:12.5px;color:var(--accent)">● Watching PhishTank — auto-checks every ${w.interval}s <span style="color:var(--faint)">(background, no page reload)</span></div>`+
