@@ -343,13 +343,17 @@ class SBSession:
                    "one more step", "before you proceed", "before you continue")
 
     def _has_cf_widget(self, sb) -> bool:
-        """The Cloudflare Turnstile widget is in the DOM — detect the iframe/element directly since its
-        'verify you are human' text lives in a cross-origin iframe the page source can't see."""
+        """A VISIBLE Cloudflare Turnstile CHALLENGE is on the page (its 'verify you are human' text lives in
+        a cross-origin iframe the page source can't read). Visible + sized ONLY — a solved/residual/hidden
+        Turnstile element Cloudflare's bot-management leaves in the DOM must NOT false-positive as a gate
+        (that made the walk bail on the real post-challenge page)."""
         try:
-            return bool(sb.execute_script(
-                "return !!(document.querySelector('iframe[src*=\"challenges.cloudflare.com\"]')"
-                "||document.querySelector('iframe[src*=\"turnstile\"]')"
-                "||document.querySelector('.cf-turnstile,#cf-turnstile,[data-sitekey]'));"))
+            return bool(sb.execute_script("""
+              function vis(e){ if(!e) return false; var r=e.getBoundingClientRect();
+                return e.offsetParent!==null && r.width>20 && r.height>20; }
+              if(vis(document.querySelector('iframe[src*="challenges.cloudflare.com"],iframe[src*="turnstile"]'))) return true;
+              return vis(document.querySelector('.cf-turnstile,#cf-turnstile'));
+            """))
         except Exception:
             return False
 
