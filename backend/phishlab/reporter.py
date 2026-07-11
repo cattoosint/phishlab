@@ -148,7 +148,7 @@ function walk(root, acc){
   try{ root.querySelectorAll('*').forEach(function(e){ if(e.shadowRoot) walk(e.shadowRoot, acc); }); }catch(_){ }
   return acc;
 }
-var rx=/confirm upload|upload file|reanalyz|analyse file|analyze file|proceed|continue/i;
+var rx=/confirm upload|^\s*upload\s*$|upload file/i;   // NOT 'Reanalyze' (that re-scans a known file)
 var els=walk(document,[]);
 for(var i=0;i<els.length;i++){ var e=els[i], t=(e.innerText||e.textContent||e.value||'').trim();
   try{ if(t&&rx.test(t)&&e.offsetParent!==null){ e.click(); return t.slice(0,40); } }catch(_){} }
@@ -200,10 +200,8 @@ def _extract_fields(service: str, text: str, url: str) -> dict:
             out["detected"] = int(m.group(1))
             out["total"] = int(m.group(2))
             out["score"] = f"{m.group(1)}/{m.group(2)}"
-        for label, rx in (("sha256", _SHA256_RE), ("sha1", _SHA1_RE), ("md5", _MD5_RE)):
-            hm = rx.search(t)
-            if hm:
-                out[label] = hm.group(0).lower()
+        # NB: do NOT scrape md5/sha256 off the page — a URL report has no file, and the "hash" VT shows there
+        # is meaningless. Real file hashes come from the file's own bytes (self.file_hashes), file reports only.
         # "Last Analysis Date" / "N minutes ago" style timestamps VT/HA show
         tm = re.search(r"(last analysis date|analysis date|analyzed|submitted)\D{0,20}"
                        r"(\d[\d:\- ]{6,}|\d+\s+\w+\s+ago)", t, re.I)
@@ -344,13 +342,12 @@ class ReportSession:
             self.report["cf_solving"] = False
 
     # ── submission per service ──
+    # DESIGN (per the analyst): PhishLab only OPENS the right page and FILLS the link (or attaches the file).
+    # It does NOT click submit/search/confirm buttons (that navigated FortiGuard to its rating-request form
+    # and re-scanned VT files) and does NOT auto-solve the CAPTCHA. The analyst completes the CAPTCHA + submit
+    # in the window; PhishLab auto-captures when the results render (or on 'Capture results').
     def _navigate_and_prefill(self, sb) -> None:
         cfg = SERVICES[self.service]
-        # VirusTotal FILE report: try the file's HASH report first — if VT already has the file it shows the
-        # verdict instantly (no upload, no CAPTCHA). Most phishing attachments are already known.
-        if self.file_bytes and self.service == "virustotal" and self.file_hashes.get("sha256"):
-            if self._vt_file_by_hash(sb):
-                return
         page = cfg["upload_page"] if (self.file_bytes and cfg.get("supports_file")) else cfg["url_page"]
         self.state = "loading"
         self._log(f"Opening {cfg['label']} — {page}")
@@ -362,61 +359,29 @@ class ReportSession:
             except Exception:
                 self._log("(page slow to load — continuing)")
         self._wait(sb, 3)
-        if self._still_captcha(sb):
-            self._try_basic_captcha(sb)
-
         if self.file_bytes and cfg.get("supports_file"):
             self._prefill_file(sb)
         elif self.url:
             self._prefill_url(sb)
 
-    def _vt_file_by_hash(self, sb) -> bool:
-        """Open VirusTotal's report for the file's SHA256 directly. True if VT KNOWS the file (report showing)
-        — no upload needed; False if unknown (caller falls back to the upload form)."""
-        h = self.file_hashes["sha256"]
-        self.state = "loading"
-        self._log(f"VirusTotal: looking up the file by SHA256 (skips upload if it's already known) — {h}")
-        try:
-            sb.uc_open_with_reconnect(f"https://www.virustotal.com/gui/file/{h}", reconnect_time=5)
-        except Exception:
-            try:
-                sb.open(f"https://www.virustotal.com/gui/file/{h}")
-            except Exception:
-                return False
-        self._wait(sb, 4)
-        if self._still_captcha(sb):
-            self._try_basic_captcha(sb)
-            self._wait(sb, 2)
-        b = self._deep_text(sb)
-        if bool(_VENDOR_RE.search(b)) or "no security vendors flagged" in b:
-            self._log("VirusTotal already has this file — showing its report.")
-            return True
-        self._log("VirusTotal hasn't seen this file — uploading it instead.")
-        return False
-
     def _prefill_url(self, sb) -> None:
         ok = False
         try:
-            ok = bool(sb.execute_script(_DEEP_INPUTS_JS, self.url))
+            ok = bool(sb.execute_script(_DEEP_INPUTS_JS, self.url))   # type into the box (+ Enter); NO button-click
         except Exception:
             ok = False
         if ok:
-            self._log(f"Pre-filled the URL and pressed search: {self.url}")
-            self._wait(sb, 3)
-            # if Enter didn't fire the search, try clicking a scan/search button
-            try:
-                clicked = sb.execute_script(_DEEP_SUBMIT_JS)
-                if clicked:
-                    self._log(f"Clicked '{clicked}' to submit.")
-                    self._wait(sb, 3)
-            except Exception:
-                pass
+            self.report["human_needed"] = "captcha"
+            self._log(f"Filled the link into the box: {self.url}")
+            self._log("→ Now SOLVE THE CAPTCHA and submit in the Chrome window. I'll screenshot when the "
+                      "result renders (or press 'Capture results').")
         else:
             self.report["human_needed"] = "submit"
-            self._log(f"Couldn't reach the input automatically — PASTE this URL and submit in the window: {self.url}")
+            self._log(f"Couldn't reach the box automatically — PASTE this into the window and submit: {self.url}")
 
     def _prefill_file(self, sb) -> None:
-        """Write the attachment to a temp file and hand it to the page's <input type=file>."""
+        """Stage the attachment to a temp file and hand it to the page's <input type=file> (piercing shadow
+        DOM). We do NOT click any confirm/upload button — the analyst confirms + solves the CAPTCHA."""
         import tempfile
         safe = re.sub(r"[^A-Za-z0-9._-]", "_", self.file_name or "sample.bin")[:80] or "sample.bin"
         tmp = os.path.join(tempfile.gettempdir(), f"pl_report_{self.id}_{safe}")
@@ -436,19 +401,12 @@ class ReportSession:
         if el is not None:
             try:
                 el.send_keys(tmp)                                  # hand the OS path to the file input
-                self._log(f"Selected {safe} in the upload form.")
-                self._wait(sb, 3)
-                try:
-                    clicked = sb.execute_script(_CONFIRM_UPLOAD_JS)   # VT shows 'Confirm upload' for a known file
-                    if clicked:
-                        self._log(f"Clicked '{clicked}' to upload.")
-                        self._wait(sb, 3)
-                except Exception:
-                    pass
+                self.report["human_needed"] = "captcha"
+                self._log(f"Attached {safe}. → Confirm the upload + solve the CAPTCHA in the window; I'll "
+                          "screenshot the verdict when it renders (or press 'Capture results').")
                 return
             except Exception as exc:
-                self._log(f"Auto-select failed ({type(exc).__name__}).")
-        # couldn't attach automatically → give the analyst the exact path to pick manually
+                self._log(f"Auto-attach failed ({type(exc).__name__}).")
         self.report["human_needed"] = "submit"
         self._log(f"Couldn't auto-attach — in the window click 'Choose file' and pick:  {tmp}")
 

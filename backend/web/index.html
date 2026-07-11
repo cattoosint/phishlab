@@ -88,9 +88,10 @@
   .ev-tile .cap .lab{font-weight:600}
   .ev-tile .cap span:not(.lab){color:var(--faint);font-size:11px;font-family:var(--mono);white-space:nowrap}
   .ev-tile .ev-hash{padding:6px 10px;font-family:var(--mono);font-size:10px;color:var(--faint);border-top:1px solid var(--line);word-break:break-all;line-height:1.5}
-  .ev-tile .ev-foot{padding:6px 10px;border-top:1px solid var(--line)}
-  .ev-link{font-size:11px;color:var(--accent);text-decoration:none}
+  .ev-tile .ev-foot{padding:6px 10px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:5px}
+  .ev-link{font-size:10.5px;color:var(--accent);text-decoration:none;font-family:var(--mono);word-break:break-all;line-height:1.4}
   .ev-link:hover{text-decoration:underline}
+  .ev-copy{align-self:flex-start;padding:2px 8px;font-size:10px}
   .trk.taken{border-left-color:var(--bad);background:rgba(217,95,87,.06)}
   .case{margin-bottom:8px}
   .case .trk{margin-bottom:0;cursor:pointer}
@@ -773,7 +774,7 @@ async function renderEvidence(rep){
     if(res.score) meta.push(res.score+' vendors'); if(res.category) meta.push('cat: '+res.category);
     const hashLine=(r.target_kind==='file'&&(fh.sha256||fh.md5))
       ? `<div class="ev-hash">sha256 ${esc(fh.sha256||'')}${fh.md5?'<br>md5&nbsp;&nbsp;&nbsp;'+esc(fh.md5):''}</div>` : '';
-    const link=r.permalink?`<div class="ev-foot"><a href="${esc(r.permalink)}" target="_blank" class="ev-link">open ${esc(r.service_label||r.service)} report ↗</a></div>`:'';
+    const link=r.permalink?`<div class="ev-foot"><a href="${esc(r.permalink)}" target="_blank" class="ev-link" title="open the report">${esc(r.permalink)}</a><button class="cbtn ev-copy" onclick="event.preventDefault();event.stopPropagation();copyText(this,'${jsq(r.permalink)}')">copy link</button></div>`:'';
     tiles.push(`<div class="ev-tile"><a href="${esc(r.shot_url)}" target="_blank"><img src="${esc(r.shot_url)}"></a>`+
       `<div class="cap"><span class="lab">${esc(r.service_label||r.service)}</span>${meta.length?'<span>'+esc(meta.join(' · '))+'</span>':''}</div>${hashLine}${link}</div>`);
   });
