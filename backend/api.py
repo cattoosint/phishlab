@@ -605,6 +605,13 @@ async def report_capture(sid: str):
     return {"ok": True, "state": s.state}
 
 
+@app.get("/api/report/for")
+async def report_for(url: str):
+    """Scanner artifacts (VT/HA/FortiGuard screenshots + parsed score/hash) captured for this URL — feeds
+    the detonation report's evidence gallery."""
+    return {"reports": RPT.REPORT_INDEX.get(RPT._norm_url(url or ""), [])}
+
+
 @app.get("/api/report/{sid}/shot")
 async def report_shot(sid: str):
     """The saved results screenshot PNG (download / copy). Served only from the reports dir."""

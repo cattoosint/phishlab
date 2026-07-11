@@ -593,6 +593,10 @@ class SBSession:
             url = st.get("url") or ""
             fc = fill_count.get(url, 0)
             has_pw_form = any(f.get("has_password") for f in st.get("forms", []))
+            # keep the CLEAN login-page shot (captured at load, BEFORE any creds) as report evidence
+            if has_pw_form and not self.report.get("login_screenshot"):
+                self.report["login_screenshot"] = st.get("screenshot")
+                self.report["login_url"] = url
             if fc == 0 or (fc < 2 and has_pw_form):
                 fill_count[url] = fc + 1
                 filled = self._fill(sb)

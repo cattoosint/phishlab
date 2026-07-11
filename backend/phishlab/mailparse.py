@@ -141,7 +141,10 @@ def _analyze_attachment(name: str, ctype: str, payload: bytes, _depth: int = 0) 
     """Hash + classify an attachment and extract candidate URLs from PDFs (text + QR), HTML, and (when
     a phishing email is forwarded AS an attachment) recursively from a nested .eml/.msg."""
     kind = _att_kind(name, ctype)
-    sha256 = hashlib.sha256(payload or b"").hexdigest()
+    blob = payload or b""
+    sha256 = hashlib.sha256(blob).hexdigest()
+    md5 = hashlib.md5(blob).hexdigest()
+    sha1 = hashlib.sha1(blob).hexdigest()
     links: list[dict] = []
     if kind == "pdf":
         text_urls, qr_urls = _pdf_links(payload)
@@ -160,8 +163,8 @@ def _analyze_attachment(name: str, ctype: str, payload: bytes, _depth: int = 0) 
                               "attachment": name})
         except Exception:
             pass
-    meta = {"name": name or "(unnamed)", "ctype": ctype or "", "size": len(payload or b""),
-            "sha256": sha256, "kind": kind, "link_count": len(links)}
+    meta = {"name": name or "(unnamed)", "ctype": ctype or "", "size": len(blob),
+            "sha256": sha256, "md5": md5, "sha1": sha1, "kind": kind, "link_count": len(links)}
     return {"meta": meta, "links": links, "kind": kind}
 
 

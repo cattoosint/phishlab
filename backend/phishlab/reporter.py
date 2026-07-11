@@ -40,6 +40,14 @@ except Exception:
 REPORTS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "reports")
 HUMAN_TIMEOUT = int(os.getenv("PHISH_REPORT_TIMEOUT") or "600")     # max wait for the human to finish (s)
 
+# normalized target-URL -> [{service, service_label, shot_url, result, at, id}] so a detonation report can
+# surface the VT/HA/FortiGuard screenshots captured for that same URL (the "evidence" gallery).
+REPORT_INDEX: dict[str, list] = {}
+
+
+def _norm_url(u: str) -> str:
+    return (u or "").split("#")[0].rstrip("/").lower()
+
 SERVICES: dict[str, dict] = {
     "virustotal": {
         "label": "VirusTotal",
@@ -417,6 +425,13 @@ class ReportSession:
             pass
         self.report["captured_at"] = time.time()
         r = self.report["result"]
+        # index this artifact by the target URL so the detonation report's evidence gallery can pull it in
+        if self.report.get("shot_url") and self.url:
+            lst = REPORT_INDEX.setdefault(_norm_url(self.url), [])
+            lst[:] = [e for e in lst if e.get("service") != self.service]     # newest per service wins
+            lst.append({"service": self.service, "service_label": self.report["service_label"],
+                        "shot_url": self.report["shot_url"], "result": r,
+                        "at": self.report["captured_at"], "id": self.id})
         self._log("Captured. " + (f"{r.get('score','')} · {r.get('sha256','') or r.get('md5','')}".strip(" ·")
                                   or "screenshot saved — open it to read the score/hash."))
 

@@ -79,6 +79,12 @@
   .repfields .f{background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:6px 10px;font-size:12px;color:var(--muted)}
   .repfields .f b{color:var(--text);font-family:var(--mono)}
   .repconsole{font-family:var(--mono);font-size:11.5px;color:var(--muted);max-height:120px;overflow:auto;margin-top:10px;white-space:pre-wrap;line-height:1.5}
+  /* evidence gallery — login-page + VT/HA/FortiGuard proof screenshots side by side */
+  .ev-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px}
+  .ev-tile{display:block;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--bg);text-decoration:none;color:inherit}
+  .ev-tile img{width:100%;display:block;background:#fff;cursor:zoom-in;aspect-ratio:16/10;object-fit:cover;object-position:top}
+  .ev-tile .cap{padding:7px 10px;font-size:12px;color:var(--text);border-top:1px solid var(--line);display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+  .ev-tile .cap span{color:var(--faint);font-size:11px;font-family:var(--mono);white-space:nowrap}
   .trk.taken{border-left-color:var(--bad);background:rgba(217,95,87,.06)}
   .case{margin-bottom:8px}
   .case .trk{margin-bottom:0;cursor:pointer}
@@ -383,6 +389,11 @@
       <div class="card c-violet"><h2>IOCs</h2><div class="body" id="iocs"></div></div>
     </div>
 
+    <div class="card c-violet" id="evidencecard" style="display:none">
+      <h2>Evidence · proof screenshots <span id="evcount"></span></h2>
+      <div class="body" id="evidence"></div>
+    </div>
+
     <div class="card c-teal" id="redirectcard" style="display:none">
       <h2>Detonation graph <span id="rdcount"></span></h2>
       <div class="body" style="padding:8px 10px 10px">
@@ -473,7 +484,7 @@ function renderEmail(d){
     ((auth.spf||auth.dkim||auth.dmarc)?`<div class="signals" style="margin:8px 0 4px">${ab('spf')}${ab('dkim')}${ab('dmarc')}</div>`:'')+
     `<div class="kv"><span class="k">links found</span><span class="v">${links.length}</span></div>`+
     (links.length?`<ul class="list">${links.map(lk=>`<li style="word-break:break-all"><span class="chip" style="color:${_SRC_COL[lk.source]||'var(--muted)'};border-color:${_SRC_COL[lk.source]||'var(--line)'}">${esc(lk.source)}</span> ${esc(lk.url)}<div style="margin-top:5px;display:flex;gap:6px;flex-wrap:wrap"><button class="cbtn rep" onclick="detonateLink('${jsq(lk.url)}')">Detonate ▶</button><button class="cbtn" onclick="copyText(this,'${jsq(lk.url)}')">Copy</button><button class="cbtn" onclick="startReportLink('virustotal','${jsq(lk.url)}')" title="Screenshot the VirusTotal verdict">VT</button><button class="cbtn" onclick="startReportLink('fortiguard','${jsq(lk.url)}')" title="Rate/submit on FortiGuard">FortiGuard</button></div></li>`).join('')}</ul>`:'<div class="empty-note">No links found in this email/file.</div>')+
-    (atts.length?`<div class="kv" style="margin-top:8px"><span class="k">attachments</span><span class="v">${atts.length}</span></div><ul class="list">${atts.map((a,ix)=>`<li>${esc(a.name)} <span style="color:var(--faint)">[${esc(a.kind)}] ${Math.round((a.size||0)/1024)}KB · ${a.link_count} link(s)</span><br><span style="color:var(--faint);font-size:10.5px">sha256 ${esc(a.sha256||'')}</span>${(a.kind==='pdf'||a.kind==='html')?`<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap"><button class="cbtn rep" onclick="startReportFile('hybrid','${jsq(aid)}',${ix})" title="Upload this file to Hybrid Analysis">→ Hybrid Analysis</button><button class="cbtn" onclick="startReportFile('virustotal','${jsq(aid)}',${ix})" title="Upload this file to VirusTotal">→ VirusTotal</button></div>`:''}</li>`).join('')}</ul>`:'')+
+    (atts.length?`<div class="kv" style="margin-top:8px"><span class="k">attachments</span><span class="v">${atts.length}</span></div><ul class="list">${atts.map((a,ix)=>`<li>${esc(a.name)} <span style="color:var(--faint)">[${esc(a.kind)}] ${Math.round((a.size||0)/1024)}KB · ${a.link_count} link(s)</span><br><span style="color:var(--faint);font-size:10.5px">sha256 ${esc(a.sha256||'')}${a.md5?'<br>md5&nbsp;&nbsp;&nbsp;'+esc(a.md5):''}${a.sha1?'<br>sha1&nbsp;&nbsp;'+esc(a.sha1):''}</span>${(a.kind==='pdf'||a.kind==='html')?`<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap"><button class="cbtn rep" onclick="startReportFile('hybrid','${jsq(aid)}',${ix})" title="Upload this file to Hybrid Analysis">→ Hybrid Analysis</button><button class="cbtn" onclick="startReportFile('virustotal','${jsq(aid)}',${ix})" title="Upload this file to VirusTotal">→ VirusTotal</button></div>`:''}</li>`).join('')}</ul>`:'')+
   `</div></div>`;
 }
 function detonateLink(url){ $('#url').value=url; try{ $('#url').scrollIntoView({behavior:'smooth',block:'center'}); }catch(e){} detonate(); }
@@ -547,7 +558,7 @@ async function _pollReport(sid){
   }
 }
 async function capReport(){ if(!_repSid) return; $('#repcap').disabled=true; try{ await fetch('/api/report/'+_repSid+'/capture',{method:'POST'}); }catch(e){} setTimeout(()=>{ $('#repcap').disabled=false; },1500); }
-function closeReport(){ if(_repPoll){ clearInterval(_repPoll); _repPoll=null; } $('#repmodal').className='repmodal'; }
+function closeReport(){ if(_repPoll){ clearInterval(_repPoll); _repPoll=null; } $('#repmodal').className='repmodal'; if(window._evRep) renderEvidence(window._evRep); }
 async function _copyShot(u){ try{ const b=await (await fetch(u)).blob(); await navigator.clipboard.write([new ClipboardItem({[b.type]:b})]); setStatus('Screenshot copied to clipboard.'); }catch(e){ setStatus('Copy failed — use Download instead.',true); } }
 
 async function detonate(){
@@ -741,6 +752,23 @@ function _gpaint(){
   svg.querySelectorAll('.g-node').forEach(g=>{ const n=nodes[+g.dataset.n]; g.setAttribute('transform',`translate(${n.x.toFixed(1)},${n.y.toFixed(1)})`); });
 }
 function _gtick(){ const ke=_gstep(); _gpaint(); GRAPH.raf=(GRAPH.drag||ke>0.4)?requestAnimationFrame(_gtick):null; }
+async function renderEvidence(rep){
+  const card=$('#evidencecard'), box=$('#evidence'); if(!card||!box) return;
+  window._evRep=rep;                                                       // so a finished report can refresh us
+  const tiles=[];
+  if(rep.login_screenshot){                                               // the clean login page, before creds
+    const src='data:image/jpeg;base64,'+rep.login_screenshot;
+    tiles.push(`<a class="ev-tile" href="${src}" target="_blank"><img src="${src}"><div class="cap">Login page <span>pre-creds</span></div></a>`);
+  }
+  let reports=[];
+  try{ reports=((await (await fetch('/api/report/for?url='+encodeURIComponent(rep.url||''))).json()).reports)||[]; }catch(e){}
+  reports.forEach(r=>{ const res=r.result||{}, extra=res.score?res.score+' vendors':(res.category?'cat: '+res.category:'');
+    tiles.push(`<a class="ev-tile" href="${esc(r.shot_url)}" target="_blank"><img src="${esc(r.shot_url)}"><div class="cap">${esc(r.service_label||r.service)}${extra?' <span>'+esc(extra)+'</span>':''}</div></a>`); });
+  if(!tiles.length){ card.style.display='none'; return; }
+  card.style.display=''; $('#evcount').textContent=tiles.length+' item'+(tiles.length===1?'':'s');
+  box.innerHTML=`<div class="ev-grid">${tiles.join('')}</div>`+
+    (reports.length?'':'<div class="hint" style="margin-top:9px">Run <b>VirusTotal / FortiGuard / Hybrid Analysis</b> from the Takedown card to add scanner screenshots here.</div>');
+}
 function renderGraph(rep){
   const card=$('#redirectcard'), svg=$('#graphsvg'); if(!card||!svg) return;
   if(GRAPH.raf){ cancelAnimationFrame(GRAPH.raf); GRAPH.raf=null; }
@@ -817,6 +845,9 @@ function render(rep){
 
   // detonation graph (SpiderFoot-style force-directed node-link)
   try{ renderGraph(rep); }catch(e){ const rc=$('#redirectcard'); if(rc) rc.style.display='none'; }
+
+  // evidence gallery — login page (pre-creds) + VT/HA/FortiGuard proof screenshots
+  try{ renderEvidence(rep); }catch(e){ const ec=$('#evidencecard'); if(ec) ec.style.display='none'; }
 
   // timeline
   const tl=$('#timeline'); tl.innerHTML='';
