@@ -304,6 +304,21 @@ class SBSession:
             except Exception:
                 pass
 
+    def _wait_for_password(self, sb, secs) -> None:
+        """After submitting an email-first login (MS SSO 'email → Next → password'), wait for the password
+        field to render so the next loop fills it, instead of stopping the walk after just the email step."""
+        end = time.time() + secs
+        while time.time() < end:
+            if self._cancel.is_set():
+                return
+            self._wait(sb, 1)
+            try:
+                if sb.execute_script("return !!document.querySelector('input[type=password]:not([disabled])');"):
+                    self._wait(sb, 1)          # a beat more so the field is interactive
+                    return
+            except Exception:
+                pass
+
     # ── browser interstitials (bad TLS cert / SafeBrowsing) — phishing sites routinely trip these ──
     def _ignore_certs(self, sb):
         try:
@@ -600,13 +615,22 @@ class SBSession:
             if fc == 0 or (fc < 2 and has_pw_form):
                 fill_count[url] = fc + 1
                 filled = self._fill(sb)
+                if not filled and st.get("forms"):        # a form IS present but nothing filled → the login is
+                    self._wait_for_form(sb, 5)            # still rendering (heavy MS/SSO clone). Give it a beat
+                    filled = self._fill(sb)               # and retry, so the walk doesn't quit on a race.
                 if filled:
+                    kinds = {f.get("kind") for f in filled}
                     action = next((f.get("action") for f in st.get("forms", []) if f.get("action")), url)
                     off = bool(_host(action) and _host(action) != _host(url))
                     self._log(f"Step {i}: entered " + ", ".join(f"{f['kind']}={f['value']}" for f in filled)
                               + f"  ->  {action}" + ("  [!] OFF-SITE" if off else ""))
                     self._submit(sb)
-                    self._wait(sb, 3)
+                    # email-first login (MS SSO: email → Next → password) — WAIT for the password field to
+                    # appear so the next loop fills it, instead of concluding the walk after just the email.
+                    if "password" not in kinds:
+                        self._wait_for_password(sb, 8)
+                    else:
+                        self._wait(sb, 3)
                     self.report["steps"].append({
                         "i": i, "action": "fill+submit", "filled_fields": filled, "creds_sent_to": action,
                         "off_site": off, "screenshot": self._shot_b64(sb),
