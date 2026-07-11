@@ -287,6 +287,16 @@
       <span style="color:var(--faint)">↳ Or <b>email the detonation box</b> with the URL as the <b>subject line</b> (body empty) — it's auto-picked up and detonated.</span></div>
   </section>
 
+  <section class="intake" style="margin-top:16px">
+    <label for="emailfile">Or analyze a phishing email / attachment</label>
+    <div class="row" style="align-items:center;flex-wrap:wrap;gap:10px">
+      <input type="file" id="emailfile" accept=".eml,.msg,.pdf,.html,.htm,.txt" style="flex:1;background:var(--panel);border:1px solid var(--line);border-radius:7px;color:var(--muted);font-size:13px;padding:9px 11px">
+      <button class="go" id="emailgo" onclick="analyzeEmail()">Analyze email / file</button>
+    </div>
+    <div class="hint">.eml / Outlook .msg / .pdf / .html — pulls links from the body, PDF text, <b>PDF QR codes</b>, and HTML, then detonate each. Files are parsed, <b>never executed</b>.</div>
+  </section>
+  <div id="emailpanel" style="display:none;margin-top:8px"></div>
+
   <div id="inbox-strip" style="display:none;margin-bottom:20px">
     <div style="font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);margin-bottom:9px">📨 Email intake · <span id="inbox-note"></span> · click to open the report</div>
     <div id="inbox-list"></div>
@@ -400,6 +410,38 @@ function copyText(btn, text){
   else _fbCopy(text, flash);
 }
 function _fbCopy(text, cb){ try{ const ta=document.createElement('textarea'); ta.value=text||''; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); cb&&cb(); }catch(e){} }
+
+// ── phishing email / attachment analysis ─────────────────────────────────────
+async function analyzeEmail(){
+  const f=$('#emailfile').files[0]; if(!f){ setStatus('Choose a .eml / .msg / .pdf / .html file first.',true); return; }
+  const btn=$('#emailgo'); btn.disabled=true; const ot=btn.textContent; btn.textContent='Analyzing…';
+  const fd=new FormData(); fd.append('file', f);
+  try{
+    const r=await fetch('/api/email/analyze',{method:'POST',body:fd});
+    const d=await r.json();
+    if(!r.ok||d.error){ setStatus(d.error||('HTTP '+r.status),true); }
+    else { clearStatus(); renderEmail(d); }
+  }catch(e){ setStatus('Analyze failed: '+e.message,true); }
+  btn.disabled=false; btn.textContent=ot;
+}
+const _AUTH_BAD=/fail|softfail|none|neutral|temperror|permerror/i;
+const _SRC_COL={'body':'var(--accent)','pdf-text':'var(--warn)','pdf-qr':'#d072b0','html':'#9b8cf0'};
+function renderEmail(d){
+  const p=$('#emailpanel'); if(!p) return;
+  const h=d.headers||{}, auth=h.auth||{}, links=d.links||[], atts=d.attachments||[];
+  const ab=k=>{ const v=auth[k]; if(!v) return ''; const bad=_AUTH_BAD.test(v); return `<span class="sig ${bad?'on':''}" style="color:${bad?'var(--bad)':'var(--ok)'}">${k.toUpperCase()}: <b>${esc(v)}</b></span>`; };
+  const kv=(k,v)=> v?`<div class="kv"><span class="k">${k}</span><span class="v">${esc(v)}</span></div>`:'';
+  p.style.display='block';
+  p.innerHTML=`<div class="card c-key"><h2>Email / attachment analysis <span>${esc(d.kind||'')}</span></h2><div class="body">`+
+    (d.error?`<div class="status err on" style="margin:0 0 8px">${esc(d.error)}</div>`:'')+
+    kv('from',h.from)+kv('subject',h.subject)+kv('reply-to',h.reply_to)+kv('return-path',h.return_path)+
+    ((auth.spf||auth.dkim||auth.dmarc)?`<div class="signals" style="margin:8px 0 4px">${ab('spf')}${ab('dkim')}${ab('dmarc')}</div>`:'')+
+    `<div class="kv"><span class="k">links found</span><span class="v">${links.length}</span></div>`+
+    (links.length?`<ul class="list">${links.map(lk=>`<li style="word-break:break-all"><span class="chip" style="color:${_SRC_COL[lk.source]||'var(--muted)'};border-color:${_SRC_COL[lk.source]||'var(--line)'}">${esc(lk.source)}</span> ${esc(lk.url)}<div style="margin-top:5px;display:flex;gap:6px"><button class="cbtn rep" onclick="detonateLink('${jsq(lk.url)}')">Detonate ▶</button><button class="cbtn" onclick="copyText(this,'${jsq(lk.url)}')">Copy</button></div></li>`).join('')}</ul>`:'<div class="empty-note">No links found in this email/file.</div>')+
+    (atts.length?`<div class="kv" style="margin-top:8px"><span class="k">attachments</span><span class="v">${atts.length}</span></div><ul class="list">${atts.map(a=>`<li>${esc(a.name)} <span style="color:var(--faint)">[${esc(a.kind)}] ${Math.round((a.size||0)/1024)}KB · ${a.link_count} link(s)</span><br><span style="color:var(--faint);font-size:10.5px">sha256 ${esc(a.sha256||'')}</span></li>`).join('')}</ul>`:'')+
+  `</div></div>`;
+}
+function detonateLink(url){ $('#url').value=url; try{ $('#url').scrollIntoView({behavior:'smooth',block:'center'}); }catch(e){} detonate(); }
 
 async function detonate(){
   const url = $('#url').value.trim();

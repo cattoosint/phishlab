@@ -23,7 +23,7 @@ from base64 import b64encode
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, File, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
@@ -53,6 +53,7 @@ def _load_dotenv() -> None:
 _load_dotenv()
 
 from phishlab import mailbox as M        # noqa: E402  (import after .env is loaded)
+from phishlab import mailparse as MP     # noqa: E402
 from phishlab import net_guard as G      # noqa: E402
 from phishlab import phishtank as PT     # noqa: E402
 from phishlab import report as R         # noqa: E402
@@ -500,6 +501,39 @@ async def pt_check(url: str, username: str | None = None):
     """One-shot: is this URL already on PhishTank (under the reporter)? Returns the detail link if so."""
     hit, rows = await PT.find_for_url(_norm_url(url), username or PT.USER_DEFAULT)
     return {"hit": hit, "recent": rows[:8], "default_user": PT.USER_DEFAULT}
+
+
+# ── phishing email / attachment analysis ──────────────────────────────────────
+# Upload a .eml / Outlook .msg (or a loose .pdf/.html) → extract every candidate URL (email body, PDF
+# text + PDF QR codes, HTML) so the analyst can detonate each via the standard engine. Files are parsed
+# / rendered only — NEVER executed. The raw upload is retained briefly so later reporting can push the
+# attachments to Hybrid Analysis / VirusTotal.
+EMAIL_ANALYSES: dict = {}
+_EMAIL_CAP = 20
+
+
+def _evict_email():
+    if len(EMAIL_ANALYSES) > _EMAIL_CAP:
+        for k in sorted(EMAIL_ANALYSES, key=lambda k: EMAIL_ANALYSES[k]["at"])[:len(EMAIL_ANALYSES) - _EMAIL_CAP]:
+            EMAIL_ANALYSES.pop(k, None)
+
+
+@app.post("/api/email/analyze")
+async def email_analyze(file: UploadFile = File(...)):
+    """Parse an uploaded phishing email / attachment → headers + all candidate links (with source)."""
+    data = await file.read()
+    if not data:
+        return JSONResponse({"error": "Empty file."}, status_code=400)
+    if len(data) > 30_000_000:
+        return JSONResponse({"error": "File too large (30 MB max)."}, status_code=400)
+    parsed = await asyncio.to_thread(MP.parse, data, file.filename or "")
+    import time as _time
+    import uuid as _uuid
+    aid = _uuid.uuid4().hex[:12]
+    EMAIL_ANALYSES[aid] = {"data": data, "filename": file.filename or "upload",
+                           "parsed": parsed, "at": _time.time()}
+    _evict_email()
+    return {"id": aid, **parsed}
 
 
 # ── built-in EXAMPLE phishing kit (safe, self-hosted) to test the walker end-to-end ─────────────

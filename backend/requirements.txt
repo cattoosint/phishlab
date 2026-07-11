@@ -17,3 +17,11 @@ seleniumbase>=4.50
 # cryptography — parse the served TLS leaf cert for the certificate card (subject/issuer/validity/SANs),
 # works even on the invalid/self-signed certs phishing hosts use. Prebuilt wheels, no compiler needed.
 cryptography>=42
+# Phishing EMAIL / attachment analysis (phishlab/mailparse.py): parse .eml/.msg, extract links from the
+# body + PDF (text, link annotations, and QR codes) + HTML attachments. python-multipart = FastAPI file
+# uploads. NB: extract-msg pins beautifulsoup4<4.14 but SeleniumBase needs ~4.15 — 4.15 works for both;
+# keep 4.15 (the extract-msg pin is over-conservative).
+python-multipart>=0.0.9
+pymupdf>=1.24          # PDF text/links + render pages to images for QR decode (no poppler needed)
+pyzbar>=0.1.9          # decode QR codes (Windows wheel bundles the zbar DLL)
+extract-msg>=0.48      # parse Outlook .msg emails
