@@ -477,7 +477,7 @@ async function analyzeEmail(){
   btn.disabled=false; btn.textContent=ot;
 }
 const _AUTH_BAD=/fail|softfail|none|neutral|temperror|permerror/i;
-const _SRC_COL={'body':'var(--accent)','pdf-text':'var(--warn)','pdf-qr':'#d072b0','html':'#9b8cf0'};
+const _SRC_COL={'body':'var(--accent)','pdf-text':'var(--warn)','pdf-qr':'#d072b0','image-qr':'#d072b0','html':'#9b8cf0'};
 function renderEmail(d){
   const p=$('#emailpanel'); if(!p) return;
   const h=d.headers||{}, auth=h.auth||{}, links=d.links||[], atts=d.attachments||[], aid=d.id||'';
@@ -489,6 +489,7 @@ function renderEmail(d){
     (d.error?`<div class="status err on" style="margin:0 0 8px">${esc(d.error)}</div>`:'')+
     kv('from',h.from)+kv('subject',h.subject)+kv('reply-to',h.reply_to)+kv('return-path',h.return_path)+
     ((auth.spf||auth.dkim||auth.dmarc)?`<div class="signals" style="margin:8px 0 4px">${ab('spf')}${ab('dkim')}${ab('dmarc')}</div>`:'')+
+    ((d.telegram_exfil||[]).length?`<div class="kv" style="margin-top:8px"><span class="k" style="color:var(--bad)">⚠ credentials exfiltrate to</span><span class="v" style="color:var(--bad);text-align:right">${d.telegram_exfil.map(t=>'Telegram bot '+esc(t.bot_id)+(t.chat_id?' · chat '+esc(t.chat_id):'')).join('<br>')}</span></div>`:'')+
     `<div class="kv"><span class="k">links found</span><span class="v">${links.length}</span></div>`+
     (links.length?`<ul class="list">${links.map(lk=>`<li style="word-break:break-all"><span class="chip" style="color:${_SRC_COL[lk.source]||'var(--muted)'};border-color:${_SRC_COL[lk.source]||'var(--line)'}">${esc(lk.source)}</span> ${esc(lk.url)}<div style="margin-top:5px;display:flex;gap:6px;flex-wrap:wrap"><button class="cbtn rep" onclick="detonateLink('${jsq(lk.url)}')">Detonate ▶</button><button class="cbtn" onclick="copyText(this,'${jsq(lk.url)}')">Copy</button><button class="cbtn" onclick="startReportLink('virustotal','${jsq(lk.url)}')" title="Screenshot the VirusTotal verdict">VT</button><button class="cbtn" onclick="startReportLink('fortiguard','${jsq(lk.url)}')" title="Rate/submit on FortiGuard">FortiGuard</button></div></li>`).join('')}</ul>`:'<div class="empty-note">No links found in this email/file.</div>')+
     (atts.length?`<div class="kv" style="margin-top:8px"><span class="k">attachments</span><span class="v">${atts.length}</span></div><ul class="list">${atts.map((a,ix)=>`<li>${esc(a.name)} <span style="color:var(--faint)">[${esc(a.kind)}] ${Math.round((a.size||0)/1024)}KB · ${a.link_count} link(s)</span><br><span style="color:var(--faint);font-size:10.5px">sha256 ${esc(a.sha256||'')}${a.md5?'<br>md5&nbsp;&nbsp;&nbsp;'+esc(a.md5):''}${a.sha1?'<br>sha1&nbsp;&nbsp;'+esc(a.sha1):''}</span>${(a.kind==='pdf'||a.kind==='html')?`<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap"><button class="cbtn rep" onclick="startReportFile('hybrid','${jsq(aid)}',${ix})" title="Upload this file to Hybrid Analysis">→ Hybrid Analysis</button><button class="cbtn" onclick="startReportFile('virustotal','${jsq(aid)}',${ix})" title="Upload this file to VirusTotal">→ VirusTotal</button></div>`:''}</li>`).join('')}</ul>`:'')+
