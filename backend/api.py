@@ -23,7 +23,7 @@ from base64 import b64encode
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from fastapi import FastAPI, File, Request, UploadFile
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
@@ -57,6 +57,7 @@ from phishlab import mailparse as MP     # noqa: E402
 from phishlab import net_guard as G      # noqa: E402
 from phishlab import phishtank as PT     # noqa: E402
 from phishlab import report as R         # noqa: E402
+from phishlab import reporter as RPT      # noqa: E402  (human-assisted VT/HA/FortiGuard abuse reporting)
 from phishlab import sb_session as SB    # noqa: E402  (SeleniumBase/Chrome — the default engine)
 from phishlab import session as S        # noqa: E402  (Camoufox — proxy/decloak backup, PHISH_ENGINE=camoufox)
 from phishlab import tracker as T        # noqa: E402
@@ -534,6 +535,87 @@ async def email_analyze(file: UploadFile = File(...)):
                            "parsed": parsed, "at": _time.time()}
     _evict_email()
     return {"id": aid, **parsed}
+
+
+# ── human-assisted abuse reporting (VirusTotal / Hybrid Analysis / FortiGuard) ────────────────
+# Drives the REAL scanner page in a Chrome window (same SeleniumBase engine as detonation), auto-solves a
+# basic checkbox CAPTCHA, hands image/word challenges to the analyst, then screenshots the results page.
+# A URL goes to VirusTotal / FortiGuard; a PDF/.html attachment goes to Hybrid Analysis (file upload).
+class ReportStartReq(BaseModel):
+    service: str = Field(min_length=1, max_length=32)
+    url: str = Field(min_length=1, max_length=4000)
+
+
+@app.post("/api/report/start")
+async def report_scanner_start(req: ReportStartReq):
+    service = (req.service or "").strip().lower()
+    if service not in RPT.SERVICES:
+        return JSONResponse({"error": f"Unknown service '{service}'."}, status_code=400)
+    url = _norm_url(req.url)
+    err = _guard(url)                                     # keep the public-only discipline (no internal hosts)
+    if err:
+        return JSONResponse({"error": err}, status_code=400)
+    s = RPT.create_url(service, url)
+    return {"id": s.id, "state": s.state, "service": service}
+
+
+@app.post("/api/report/start-file")
+async def report_scanner_start_file(service: str = Form(...), file: UploadFile = File(...)):
+    service = (service or "").strip().lower()
+    if service not in RPT.SERVICES:
+        return JSONResponse({"error": f"Unknown service '{service}'."}, status_code=400)
+    if not RPT.SERVICES[service].get("supports_file"):
+        return JSONResponse({"error": f"{RPT.SERVICES[service]['label']} takes a URL, not a file."}, status_code=400)
+    data = await file.read()
+    if not data:
+        return JSONResponse({"error": "Empty file."}, status_code=400)
+    if len(data) > 100_000_000:
+        return JSONResponse({"error": "File too large (100 MB max)."}, status_code=400)
+    s = RPT.create_file(service, data, file.filename or "sample.bin")
+    return {"id": s.id, "state": s.state, "service": service}
+
+
+@app.post("/api/report/start-file-from/{aid}/{idx}")
+async def report_scanner_start_from_analysis(aid: str, idx: int, service: str = Form(...)):
+    """Report an attachment that was already parsed by /api/email/analyze (no re-upload) — used by the
+    'Report to Hybrid Analysis' button next to a PDF/.html attachment in the email view."""
+    service = (service or "").strip().lower()
+    if service not in RPT.SERVICES or not RPT.SERVICES[service].get("supports_file"):
+        return JSONResponse({"error": "Service can't take a file."}, status_code=400)
+    rec = EMAIL_ANALYSES.get(aid)
+    if not rec:
+        return JSONResponse({"error": "Analysis expired — re-upload the email/file."}, status_code=404)
+    # re-parse from the stored raw bytes to recover the attachment payload at the requested index
+    payloads = await asyncio.to_thread(MP.attachment_payloads, rec["data"], rec.get("filename", ""))
+    if idx < 0 or idx >= len(payloads):
+        return JSONResponse({"error": "No such attachment."}, status_code=404)
+    name, blob = payloads[idx]
+    if not blob:
+        return JSONResponse({"error": "Attachment had no extractable bytes."}, status_code=400)
+    s = RPT.create_file(service, blob, name)
+    return {"id": s.id, "state": s.state, "service": service}
+
+
+@app.post("/api/report/{sid}/capture")
+async def report_capture(sid: str):
+    s = S.get(sid)
+    if not s or not hasattr(s, "capture"):
+        return JSONResponse({"error": "no such report session"}, status_code=404)
+    s.capture()
+    return {"ok": True, "state": s.state}
+
+
+@app.get("/api/report/{sid}/shot")
+async def report_shot(sid: str):
+    """The saved results screenshot PNG (download / copy). Served only from the reports dir."""
+    if not re.fullmatch(r"[a-f0-9]{6,32}", sid or ""):
+        return JSONResponse({"error": "bad id"}, status_code=400)
+    for svc in RPT.SERVICES:
+        p = os.path.join(RPT.REPORTS_DIR, f"{svc}_{sid}.png")
+        if os.path.isfile(p):
+            return FileResponse(p, filename=os.path.basename(p), media_type="image/png",
+                                headers={"Cache-Control": "no-store"})
+    return JSONResponse({"error": "not captured yet"}, status_code=404)
 
 
 # ── built-in EXAMPLE phishing kit (safe, self-hosted) to test the walker end-to-end ─────────────

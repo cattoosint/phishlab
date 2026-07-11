@@ -19,6 +19,7 @@ import asyncio
 import base64
 import json
 import os
+import re
 import threading
 import time
 import uuid
@@ -41,7 +42,11 @@ except Exception:                       # Pillow ships with seleniumbase; fall b
     Image = None
 
 MAX_STEPS = int(os.getenv("PHISH_SB_MAX_STEPS") or "8")
-_FAKE = {"user": "soc-rev-8842", "email": "soc.rev8842@example.com", "pw": "Nv3r-R3al!P4ss",
+# FAKE decoy identity — plausible-looking (a real-format Gmail, not an obvious @example.com that some kits
+# reject) so validation passes, but NOT a real account. Overridable via env for a site's own decoy identity.
+_FAKE = {"user": os.getenv("PHISH_FAKE_USER", "abelrtsmith"),
+         "email": os.getenv("PHISH_FAKE_EMAIL", "abelrtsmith@gmail.com"),
+         "pw": os.getenv("PHISH_FAKE_PW", "Nv3r-R3al!P4ss"),
          "phone": "90000000", "otp": "000000", "text": "test"}
 
 # forms on the page → {action, method, has_password, fields}
@@ -65,7 +70,7 @@ for(var i=0;i<els.length;i++){var e=els[i],t=(e.type||'').toLowerCase();
  if(e.value&&t!=='password')continue;
  var n=((e.name||'')+' '+(e.id||'')+' '+(e.placeholder||'')+' '+(e.getAttribute('aria-label')||'')).toLowerCase();
  if(t==='password'||/passw|pwd/.test(n))setv(e,fake.pw,'password');
- else if(t==='email'||/email|e-mail/.test(n))setv(e,fake.email,'email');
+ else if(t==='email'||/e-?mail|\bmail\b/.test(n)||/@/.test(e.placeholder||''))setv(e,fake.email,'email');
  else if(t==='tel'||/phone|mobile|\btel\b/.test(n))setv(e,fake.phone,'phone');
  else if(/otp|\bcode\b|token|2fa|otc|verif|\bpin\b|one.?time/.test(n))setv(e,fake.otp,'otp/code');
  else if(/user|login|account|username|\bid\b/.test(n))setv(e,fake.user,'username');
@@ -81,12 +86,32 @@ if(!b){var bs=document.querySelectorAll('button,[role=button],a,input[type=butto
 if(b){b.click();return true;} var f=document.forms[0]; if(f){f.submit();return true;} return false;
 """
 
-# broad "click past a NOTICE/ADVISORY/interstitial" control (SG scam advisory, "proceed anyway", etc.)
+# Click the most-promising control to move DEEPER into the phish. Priority-ranked so it goes for the lure
+# CTA (SEE DETAILS / LOGIN / VIEW DOCUMENT) and dismisses gating overlays (Close / Continue / "wait 5s"),
+# while NEVER wandering into footer/legal dead-ends (Privacy, Terms, Unsubscribe, Cookie, About…). Takes an
+# array of button texts already clicked on this page (arguments[0]) so it can click Close THEN the button
+# underneath, without re-clicking the same control. Returns the (lowercased) text it clicked, or null.
 _ADVANCE_JS = r"""
-var rx=/proceed|continue|visit|i understand|acknowledge|go to site|enter site|dismiss|ignore & proceed|ignore and proceed|at your own risk|agree|accept|confirm|yes[, ]|next|verify/i;
-var els=document.querySelectorAll('a,button,[role=button],input[type=button],input[type=submit]');
-for(var i=0;i<els.length;i++){var e=els[i],t=(e.innerText||e.value||e.textContent||'').trim();
- if(t&&rx.test(t)&&e.offsetParent!==null){e.click();return t.slice(0,50);}}
+var done=arguments[0]||[];
+var skip=/privacy|terms|cookie|unsubscribe|about us|contact|help ?center|imprint|legal|copyright|report abuse|do not sell|manage consent|\bpolicy\b|accessibility|sitemap|careers|feedback|support/i;
+var primary=/see details|view (document|file|invoice|message|now)|read message|open (document|file|in)|\baccess\b|log ?in|sign ?in|get started|continue to|release|verify now|confirm|update your|proceed to|click here|go to document|authenticate|unlock|review/i;
+var gate=/close|dismiss|got it|\bok\b|i understand|acknowledge|agree|\baccept\b|continue|proceed|next|enter|yes[, ]|start|begin/i;
+var inter=/visit|at your own risk|ignore ?& ?proceed|ignore and proceed|go to site|enter site/i;
+function vis(e){try{return e.offsetParent!==null&&e.getBoundingClientRect().width>0;}catch(_){return false;}}
+var els=document.querySelectorAll('a,button,[role=button],input[type=button],input[type=submit],[onclick]');
+var best=null,bestRank=0,bestText='';
+for(var i=0;i<els.length;i++){var e=els[i];
+ var t=((e.innerText||e.value||e.textContent||'')+' '+((e.getAttribute&&e.getAttribute('aria-label'))||'')).trim();
+ if(!t||t.length>80||!vis(e))continue;
+ if(done.indexOf(t.toLowerCase())>=0)continue;      // already clicked this exact control on this page
+ if(skip.test(t))continue;                          // never click legal/footer dead-ends
+ var rank=0;
+ if(primary.test(t))rank=4;                         // the lure CTA — deepest into the phish
+ else if(gate.test(t))rank=3;                       // a modal/overlay dismiss (Close/Continue)
+ else if(inter.test(t))rank=2;                      // browser-warning-style interstitial
+ if(rank>bestRank){bestRank=rank;best=e;bestText=t;}
+}
+if(best){try{best.click();}catch(_){}return bestText.toLowerCase();}
 return null;
 """
 
@@ -224,6 +249,61 @@ class SBSession:
         except Exception:
             return False
 
+    def _timed_gate_seconds(self, sb, html="") -> int:
+        """A fake 'let us know you are human / you have to wait N seconds before you proceed' timer gate →
+        the seconds to pause before its Continue button enables (clicking early is a no-op). 0 if none."""
+        try:
+            blob = (self._body(sb) + " " + (html or "")).lower()
+        except Exception:
+            blob = (html or "").lower()
+        if not any(k in blob for k in ("wait for the timer", "before you can proceed", "before you continue",
+                                       "let us know you are human", "you have to wait")):
+            return 0
+        secs = 0
+        for m in re.finditer(r"wait\s+(?:for\s+)?(\d{1,3})\s*second", blob):
+            secs = max(secs, int(m.group(1)))
+        if not secs:
+            secs = 6            # a timer is present but the countdown wasn't parseable → safe default
+        return min(secs, 15)    # cap so a bogus 'wait 999 seconds' can't stall the whole walk
+
+    def _await_human_captcha(self, sb, timeout=None) -> bool:
+        """Auto-solve couldn't clear it (an IMAGE/WORD Cloudflare challenge). Hand off to the analyst in the
+        Chrome window and POLL until the challenge clears, then let the walk continue. True if it cleared."""
+        if not self._still_gated(sb):
+            return True
+        timeout = timeout or int(os.getenv("PHISH_CF_HUMAN_TIMEOUT") or "240")
+        self.report["human_needed"] = "captcha"
+        self.report["cf_solving"] = False        # they must interact now — drop the 'don't touch' banner
+        self._log("Cloudflare image/word challenge — SOLVE IT in the Chrome window on the desktop. "
+                  "I'll detect when it's done and continue the steps automatically.")
+        end = time.time() + timeout
+        while time.time() < end:
+            if self._cancel.is_set():
+                return False
+            self._wait(sb, 2)
+            if not self._still_gated(sb):
+                self.report["human_needed"] = None
+                self._log("[OK] Challenge cleared by the analyst — continuing the walk.")
+                return True
+        self._log("Challenge still unsolved after waiting — stopping (use 'Open in browser' to finish).")
+        return False
+
+    def _wait_for_form(self, sb, secs) -> None:
+        """After a gate clears, poll (streaming frames) until the real page renders a fillable field / button
+        — so the walk doesn't conclude 'nothing to fill' against a still-loading post-gate page."""
+        end = time.time() + secs
+        while time.time() < end:
+            if self._cancel.is_set():
+                return
+            self._wait(sb, 1)
+            try:
+                if sb.execute_script(
+                        "return document.querySelectorAll('input:not([type=hidden]),textarea,button,form').length>0"):
+                    self._wait(sb, 1)          # a beat more so values/handlers attach
+                    return
+            except Exception:
+                pass
+
     # ── browser interstitials (bad TLS cert / SafeBrowsing) — phishing sites routinely trip these ──
     def _ignore_certs(self, sb):
         try:
@@ -319,7 +399,8 @@ class SBSession:
                 continue
             if not self._still_gated(sb):
                 return True
-        return not self._still_gated(sb)
+        # auto-solve exhausted — if it's an image/word challenge, hand to the human and WAIT for them
+        return self._await_human_captcha(sb)
 
     # ── page primitives ──
     def _capture_step(self, sb, action, i):
@@ -384,8 +465,9 @@ class SBSession:
 
     # ── the detonation walk ──
     def _walk(self, sb):
-        seen_fill: set[str] = set()
-        advanced: set[str] = set()
+        fill_count: dict[str, int] = {}      # url -> times we've filled+submitted (≤2 for re-prompting logins)
+        adv_clicks: dict[str, dict] = {}     # url -> {button_text: times_clicked} — a few DISTINCT clicks/page
+        timed_waited: set[str] = set()       # urls where we've already honoured a 'wait N seconds' timer
         cert_tried: set[str] = set()
         cf_tried: set[str] = set()
         for i in range(MAX_STEPS):
@@ -436,18 +518,29 @@ class SBSession:
                 if ok:
                     self.report["cf_warning_cleared"] = True
                     self.report["cloudflare_bypass"] = {"solved": True, "via": "seleniumbase"}
-                    self._log("[OK] Cloudflare cleared — continuing.")
-                    self._wait(sb, 1)
+                    self._log("[OK] Cloudflare cleared — waiting for the real page to render…")
+                    # a bot-check (Cloudflare/SSO 'sso_reload') often reveals the REAL sign-in form on the SAME
+                    # URL — forget this URL's prior fill/click memory so the now-visible form actually gets
+                    # handled (else the walk thinks it already did this URL and stops), then let it render.
+                    cur = st.get("url") or ""
+                    fill_count.pop(cur, None)
+                    adv_clicks.pop(cur, None)
+                    timed_waited.discard(cur)
+                    self._wait_for_form(sb, 8)
                     continue
                 self.report["cloudflare_bypass"] = {"solved": False, "via": "seleniumbase"}
                 self.report["handover_needed"] = True
                 self._log("Couldn't solve Cloudflare — interact with the Chrome window directly, or 'Open in browser'.")
                 break
 
-            # fill FAKE creds into any form + submit (once per URL)
+            # fill FAKE creds into any form + submit. Once per URL normally, but a credential page that
+            # RE-PROMPTS (the classic "password incorrect, enter again" harvester, or a login → login flow
+            # on the same URL) gets a 2nd fill so the walk pushes through the whole process, not just once.
             url = st.get("url") or ""
-            if url not in seen_fill:
-                seen_fill.add(url)
+            fc = fill_count.get(url, 0)
+            has_pw_form = any(f.get("has_password") for f in st.get("forms", []))
+            if fc == 0 or (fc < 2 and has_pw_form):
+                fill_count[url] = fc + 1
                 filled = self._fill(sb)
                 if filled:
                     action = next((f.get("action") for f in st.get("forms", []) if f.get("action")), url)
@@ -465,15 +558,27 @@ class SBSession:
                             self.report["exfil"]["form_actions"].append(f.get("action"))
                     continue
 
-            # no form — click past a notice/advisory/interstitial ("proceed anyway"), once per URL
-            if url not in advanced:
-                advanced.add(url)
+            # a fake 'are you human — please wait N seconds' timer gate: read the countdown, PAUSE for it,
+            # THEN the advance click below lands on an enabled Continue (clicking early is a no-op).
+            if url not in timed_waited:
+                secs = self._timed_gate_seconds(sb, html)
+                if secs:
+                    timed_waited.add(url)
+                    self._log(f"Step {i}: 'please wait {secs}s' human-check timer — pausing for it, then continuing…")
+                    self._wait(sb, secs + 1.5)
+
+            # click the best control to go DEEPER (lure CTA / dismiss a modal) — a few DISTINCT clicks per page
+            # so it can dismiss a 'Close' overlay THEN click the real button underneath (priority-ranked in JS).
+            counter = adv_clicks.setdefault(url, {})
+            if sum(counter.values()) < 5:
+                exhausted = [t for t, n in counter.items() if n >= 2]   # give up on a control after 2 tries
                 try:
-                    adv = sb.execute_script(_ADVANCE_JS)
+                    adv = sb.execute_script(_ADVANCE_JS, exhausted)
                 except Exception:
                     adv = None
                 if adv:
-                    self._log(f"Step {i}: clicked '{adv}' to continue past the page")
+                    counter[adv] = counter.get(adv, 0) + 1
+                    self._log(f"Step {i}: clicked '{adv[:50]}' to advance")
                     self._wait(sb, 3)
                     continue
             self._log("Nothing left to fill or click — stopping the walk.")

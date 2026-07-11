@@ -303,6 +303,66 @@ def _finish(kind: str, headers: dict, links: list[dict], attachments: list[dict]
             "body_preview": body_preview, "link_count": len(uniq)}
 
 
+def _collect_eml_payloads(data: bytes, out: list) -> None:
+    msg = BytesParser(policy=policy.default).parsebytes(data)
+    for part in _iter_parts(msg):
+        if part.get_content_type() == "message/rfc822":
+            try:
+                pl = part.get_payload()
+                inner = pl[0] if isinstance(pl, list) and pl else None
+                inner_bytes = inner.as_bytes() if inner is not None else (part.get_payload(decode=True) or b"")
+                out.append((part.get_filename() or "attached-email.eml", inner_bytes))
+            except Exception:
+                pass
+            continue
+        if part.is_multipart():
+            continue
+        fn = part.get_filename()
+        if part.get_content_disposition() == "attachment" or fn:
+            try:
+                payload = part.get_payload(decode=True) or b""
+            except Exception:
+                payload = b""
+            out.append((fn or "attachment", payload))
+
+
+def _collect_msg_payloads(data: bytes, out: list) -> None:
+    try:
+        import extract_msg
+    except Exception:
+        return
+    m = extract_msg.openMsg(io.BytesIO(data))
+    for att in (getattr(m, "attachments", []) or []):
+        try:
+            payload = att.data if isinstance(att.data, bytes) else bytes(att.data or b"")
+            name = getattr(att, "longFilename", None) or getattr(att, "shortFilename", None) or "attachment"
+            out.append((name, payload))
+        except Exception:
+            continue
+    try:
+        m.close()
+    except Exception:
+        pass
+
+
+def attachment_payloads(data: bytes, filename: str = "") -> list[tuple[str, bytes]]:
+    """Re-extract each attachment's (name, raw_bytes) in the SAME order parse() lists them in
+    `attachments[]` — so an index from the parsed view maps back to bytes for re-uploading to a scanner
+    (e.g. a PDF → Hybrid Analysis) without a second upload from the browser. Best-effort; never raises."""
+    name = (filename or "").lower().strip()
+    out: list[tuple[str, bytes]] = []
+    try:
+        if name.endswith(".msg") or data[:8] == _OLE_MAGIC:
+            _collect_msg_payloads(data, out)
+        elif name.endswith((".eml", ".txt")) or b"\nReceived:" in data[:8000] or re.match(rb"[\w-]+:\s", data[:200]):
+            _collect_eml_payloads(data, out)
+        else:
+            out.append((filename or "file", data))
+    except Exception:
+        pass
+    return out
+
+
 def parse(data: bytes, filename: str = "", _depth: int = 0) -> dict:
     """Parse an uploaded .eml / .msg / loose attachment → {kind, headers, links[], attachments[]}.
     Recurses (bounded) into a phish email forwarded AS a .eml/.msg attachment."""

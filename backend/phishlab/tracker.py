@@ -327,11 +327,11 @@ def multi_vantage_verdict(probes: list[dict]) -> dict:
     spread = (max(lens) - min(lens)) / max(1, max(lens))
     diffs = []
     if len(titles) > 1:
-        diffs.append("different page titles")
+        diffs.append("different page title")
     if len(hosts) > 1:
-        diffs.append("different final hosts")
+        diffs.append("different landing host")
     if spread > 0.45:
-        diffs.append(f"content size differs {int(spread * 100)}%")
+        diffs.append(f"page size differs by {int(spread * 100)}%")
     return {"cloaked": bool(diffs), "diffs": diffs, "responded": len(ok),
             "titles": list(titles)[:4], "hosts": [h for h in hosts if h][:4]}
 

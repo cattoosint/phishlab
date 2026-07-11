@@ -66,6 +66,19 @@
   .cbtn.rep{color:var(--accent);border-color:rgba(74,158,218,.42);font-weight:600;letter-spacing:.2px}
   .cbtn.rep:hover{color:#fff;background:var(--accent);border-color:var(--accent)}
   .trk .cbtn:hover{color:var(--text);border-color:var(--accent)}
+  /* scanner-reporting modal (VirusTotal / Hybrid Analysis / FortiGuard live capture) */
+  .repmodal{position:fixed;inset:0;background:rgba(6,10,16,.82);z-index:9999;display:none;align-items:center;justify-content:center;padding:22px}
+  .repmodal.on{display:flex}
+  .repbox{background:var(--panel);border:1px solid var(--line);border-radius:12px;max-width:1000px;width:100%;max-height:92vh;overflow:auto;box-shadow:0 18px 60px rgba(0,0,0,.55)}
+  .rephead{display:flex;align-items:center;gap:12px;padding:13px 18px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel);z-index:2}
+  .rephead h3{margin:0;font-size:15px;font-weight:700;color:var(--text)}
+  .repstage{background:#0b0f14;border-bottom:1px solid var(--line);min-height:120px}
+  .repstage img{display:block;width:100%;max-height:60vh;object-fit:contain}
+  .repbody{padding:14px 18px}
+  .repfields{display:flex;flex-wrap:wrap;gap:9px;margin:6px 0}
+  .repfields .f{background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:6px 10px;font-size:12px;color:var(--muted)}
+  .repfields .f b{color:var(--text);font-family:var(--mono)}
+  .repconsole{font-family:var(--mono);font-size:11.5px;color:var(--muted);max-height:120px;overflow:auto;margin-top:10px;white-space:pre-wrap;line-height:1.5}
   .trk.taken{border-left-color:var(--bad);background:rgba(217,95,87,.06)}
   .case{margin-bottom:8px}
   .case .trk{margin-bottom:0;cursor:pointer}
@@ -292,10 +305,31 @@
     <div class="row" style="align-items:center;flex-wrap:wrap;gap:10px">
       <input type="file" id="emailfile" accept=".eml,.msg,.pdf,.html,.htm,.txt" style="flex:1;background:var(--panel);border:1px solid var(--line);border-radius:7px;color:var(--muted);font-size:13px;padding:9px 11px">
       <button class="go" id="emailgo" onclick="analyzeEmail()">Analyze email / file</button>
+      <button class="cbtn" id="emailclear" onclick="clearEmail()" style="display:none">Clear</button>
     </div>
     <div class="hint">.eml / Outlook .msg / .pdf / .html — pulls links from the body, PDF text, <b>PDF QR codes</b>, and HTML, then detonate each. Files are parsed, <b>never executed</b>.</div>
   </section>
   <div id="emailpanel" style="display:none;margin-top:8px"></div>
+
+  <!-- scanner-reporting live capture (VirusTotal / Hybrid Analysis / FortiGuard) -->
+  <div class="repmodal" id="repmodal">
+    <div class="repbox">
+      <div class="rephead">
+        <span class="ls" id="repstate">starting</span>
+        <h3 id="reptitle">Reporting</h3>
+        <div style="flex:1"></div>
+        <button class="go" id="repcap" style="padding:7px 14px" onclick="capReport()">📸 Capture results</button>
+        <button class="cbtn" id="repclose" style="padding:9px 20px;font-size:14px;font-weight:600" onclick="closeReport()">✕ Close</button>
+      </div>
+      <div class="repstage"><img id="repimg" alt=""></div>
+      <div class="repbody">
+        <div class="hint" id="rephint" style="margin:0 0 8px"></div>
+        <div class="repfields" id="repfields"></div>
+        <div id="repdl" style="margin:6px 0"></div>
+        <div class="repconsole" id="repconsole"></div>
+      </div>
+    </div>
+  </div>
 
   <div id="inbox-strip" style="display:none;margin-bottom:20px">
     <div style="font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);margin-bottom:9px">📨 Email intake · <span id="inbox-note"></span> · click to open the report</div>
@@ -428,7 +462,8 @@ const _AUTH_BAD=/fail|softfail|none|neutral|temperror|permerror/i;
 const _SRC_COL={'body':'var(--accent)','pdf-text':'var(--warn)','pdf-qr':'#d072b0','html':'#9b8cf0'};
 function renderEmail(d){
   const p=$('#emailpanel'); if(!p) return;
-  const h=d.headers||{}, auth=h.auth||{}, links=d.links||[], atts=d.attachments||[];
+  const h=d.headers||{}, auth=h.auth||{}, links=d.links||[], atts=d.attachments||[], aid=d.id||'';
+  $('#emailclear').style.display='';
   const ab=k=>{ const v=auth[k]; if(!v) return ''; const bad=_AUTH_BAD.test(v); return `<span class="sig ${bad?'on':''}" style="color:${bad?'var(--bad)':'var(--ok)'}">${k.toUpperCase()}: <b>${esc(v)}</b></span>`; };
   const kv=(k,v)=> v?`<div class="kv"><span class="k">${k}</span><span class="v">${esc(v)}</span></div>`:'';
   p.style.display='block';
@@ -437,11 +472,83 @@ function renderEmail(d){
     kv('from',h.from)+kv('subject',h.subject)+kv('reply-to',h.reply_to)+kv('return-path',h.return_path)+
     ((auth.spf||auth.dkim||auth.dmarc)?`<div class="signals" style="margin:8px 0 4px">${ab('spf')}${ab('dkim')}${ab('dmarc')}</div>`:'')+
     `<div class="kv"><span class="k">links found</span><span class="v">${links.length}</span></div>`+
-    (links.length?`<ul class="list">${links.map(lk=>`<li style="word-break:break-all"><span class="chip" style="color:${_SRC_COL[lk.source]||'var(--muted)'};border-color:${_SRC_COL[lk.source]||'var(--line)'}">${esc(lk.source)}</span> ${esc(lk.url)}<div style="margin-top:5px;display:flex;gap:6px"><button class="cbtn rep" onclick="detonateLink('${jsq(lk.url)}')">Detonate ▶</button><button class="cbtn" onclick="copyText(this,'${jsq(lk.url)}')">Copy</button></div></li>`).join('')}</ul>`:'<div class="empty-note">No links found in this email/file.</div>')+
-    (atts.length?`<div class="kv" style="margin-top:8px"><span class="k">attachments</span><span class="v">${atts.length}</span></div><ul class="list">${atts.map(a=>`<li>${esc(a.name)} <span style="color:var(--faint)">[${esc(a.kind)}] ${Math.round((a.size||0)/1024)}KB · ${a.link_count} link(s)</span><br><span style="color:var(--faint);font-size:10.5px">sha256 ${esc(a.sha256||'')}</span></li>`).join('')}</ul>`:'')+
+    (links.length?`<ul class="list">${links.map(lk=>`<li style="word-break:break-all"><span class="chip" style="color:${_SRC_COL[lk.source]||'var(--muted)'};border-color:${_SRC_COL[lk.source]||'var(--line)'}">${esc(lk.source)}</span> ${esc(lk.url)}<div style="margin-top:5px;display:flex;gap:6px;flex-wrap:wrap"><button class="cbtn rep" onclick="detonateLink('${jsq(lk.url)}')">Detonate ▶</button><button class="cbtn" onclick="copyText(this,'${jsq(lk.url)}')">Copy</button><button class="cbtn" onclick="startReportLink('virustotal','${jsq(lk.url)}')" title="Screenshot the VirusTotal verdict">VT</button><button class="cbtn" onclick="startReportLink('fortiguard','${jsq(lk.url)}')" title="Rate/submit on FortiGuard">FortiGuard</button></div></li>`).join('')}</ul>`:'<div class="empty-note">No links found in this email/file.</div>')+
+    (atts.length?`<div class="kv" style="margin-top:8px"><span class="k">attachments</span><span class="v">${atts.length}</span></div><ul class="list">${atts.map((a,ix)=>`<li>${esc(a.name)} <span style="color:var(--faint)">[${esc(a.kind)}] ${Math.round((a.size||0)/1024)}KB · ${a.link_count} link(s)</span><br><span style="color:var(--faint);font-size:10.5px">sha256 ${esc(a.sha256||'')}</span>${(a.kind==='pdf'||a.kind==='html')?`<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap"><button class="cbtn rep" onclick="startReportFile('hybrid','${jsq(aid)}',${ix})" title="Upload this file to Hybrid Analysis">→ Hybrid Analysis</button><button class="cbtn" onclick="startReportFile('virustotal','${jsq(aid)}',${ix})" title="Upload this file to VirusTotal">→ VirusTotal</button></div>`:''}</li>`).join('')}</ul>`:'')+
   `</div></div>`;
 }
 function detonateLink(url){ $('#url').value=url; try{ $('#url').scrollIntoView({behavior:'smooth',block:'center'}); }catch(e){} detonate(); }
+function clearEmail(){ const p=$('#emailpanel'); if(p){ p.style.display='none'; p.innerHTML=''; } try{ $('#emailfile').value=''; }catch(e){} $('#emailclear').style.display='none'; clearStatus(); }
+
+// ── scanner reporting (VirusTotal / Hybrid Analysis / FortiGuard) — live capture modal ──
+let _repSid=null,_repPoll=null;
+const _SVC_LABEL={virustotal:'VirusTotal',hybrid:'Hybrid Analysis',fortiguard:'FortiGuard'};
+function _openReport(service,verb){
+  $('#repmodal').className='repmodal on';
+  $('#reptitle').textContent=verb+' '+(_SVC_LABEL[service]||service);
+  $('#repstate').textContent='starting'; $('#repstate').className='ls';
+  $('#rephint').textContent='Opening the scanner in a Chrome window on the desktop…';
+  $('#repfields').innerHTML=''; $('#repdl').innerHTML=''; $('#repconsole').textContent='';
+  $('#repimg').removeAttribute('src'); $('#repcap').style.display=''; $('#repcap').disabled=false;
+}
+function _repErr(m){ $('#repstate').textContent='error'; $('#rephint').textContent='Failed: '+m; }
+async function _repStart(service,verb,doFetch){
+  _openReport(service,verb);
+  try{ const d=await doFetch(); if(!d||d.error){ _repErr((d&&d.error)||'request failed'); return; } _beginReportPoll(d.id); }
+  catch(e){ _repErr(e.message); }
+}
+function startReportUrl(service){
+  const url=$('#url').value.trim(); if(!url){ setStatus('Paste a URL to report first.',true); return; }
+  startReportLink(service,url);
+}
+function startReportLink(service,url){
+  _repStart(service,'Reporting URL to',async()=>{
+    const r=await fetch('/api/report/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({service,url})});
+    return r.json();
+  });
+}
+function startReportFile(service,aid,idx){
+  if(!aid){ setStatus('Re-analyze the email/file first.',true); return; }
+  _repStart(service,'Uploading file to',async()=>{
+    const fd=new FormData(); fd.append('service',service);
+    const r=await fetch('/api/report/start-file-from/'+encodeURIComponent(aid)+'/'+idx,{method:'POST',body:fd});
+    return r.json();
+  });
+}
+function _beginReportPoll(sid){ _repSid=sid; if(_repPoll) clearInterval(_repPoll); _repPoll=setInterval(()=>_pollReport(sid),1300); _pollReport(sid); }
+async function _pollReport(sid){
+  let s; try{ s=await (await fetch('/api/session/'+sid)).json(); }catch(e){ return; }
+  if(s.error) return;
+  const rep=s.report||{};
+  $('#repstate').textContent=s.state;
+  if(s.has_frame) $('#repimg').src='/api/session/'+sid+'/frame?t='+Date.now();
+  let hint='';
+  if(rep.human_needed==='captcha') hint='⚠ Solve the image/word CAPTCHA in the Chrome window — I’ll continue automatically once it clears.';
+  else if(rep.human_needed==='submit') hint='⚠ The form didn’t auto-fill — paste/submit in the Chrome window.';
+  else if(rep.cf_solving) hint='🖱️ Auto-solving a basic checkbox CAPTCHA — don’t touch the mouse (~15s).';
+  else if(s.state==='awaiting_human') hint='Solve any CAPTCHA & submit in the Chrome window. I’ll auto-capture when the results render — or press Capture.';
+  else if(s.state==='ready') hint='Results detected — capturing…';
+  else if(s.state==='capturing') hint='Capturing the results page…';
+  else if(s.state==='loading') hint='Loading the scanner and pre-filling…';
+  $('#rephint').textContent=hint;
+  $('#repconsole').textContent=(rep.narration||[]).slice(-12).join('\n');
+  const res=rep.result||{}, chips=[];
+  if(res.score) chips.push(`<span class="f"><b>${esc(res.score)}</b> vendors flagged</span>`);
+  if(res.category) chips.push(`<span class="f">category <b>${esc(res.category)}</b></span>`);
+  if(res.sha256) chips.push(`<span class="f">sha256 <b>${esc(res.sha256.slice(0,24))}…</b></span>`);
+  else if(res.md5) chips.push(`<span class="f">md5 <b>${esc(res.md5)}</b></span>`);
+  if(res.analyzed) chips.push(`<span class="f">analyzed <b>${esc(res.analyzed)}</b></span>`);
+  $('#repfields').innerHTML=chips.join('');
+  if(rep.shot_url){
+    $('#repdl').innerHTML=`<a class="cbtn rep" href="${esc(rep.shot_url)}" download style="text-decoration:none">⬇ Download screenshot</a> <button class="cbtn" onclick="_copyShot('${jsq(rep.shot_url)}')">Copy image</button>`;
+    $('#repcap').style.display='none';
+  }
+  if(['done','error','cancelled'].includes(s.state)){ clearInterval(_repPoll); _repPoll=null;
+    if(rep.browser_closed && !rep.shot_url){ closeReport(); setStatus('Report window was closed before capture.',true); }
+  }
+}
+async function capReport(){ if(!_repSid) return; $('#repcap').disabled=true; try{ await fetch('/api/report/'+_repSid+'/capture',{method:'POST'}); }catch(e){} setTimeout(()=>{ $('#repcap').disabled=false; },1500); }
+function closeReport(){ if(_repPoll){ clearInterval(_repPoll); _repPoll=null; } $('#repmodal').className='repmodal'; }
+async function _copyShot(u){ try{ const b=await (await fetch(u)).blob(); await navigator.clipboard.write([new ClipboardItem({[b.type]:b})]); setStatus('Screenshot copied to clipboard.'); }catch(e){ setStatus('Copy failed — use Download instead.',true); } }
 
 async function detonate(){
   const url = $('#url').value.trim();
@@ -574,8 +681,14 @@ function verdictClass(label,score){ if(score>=45||label==='confirmed_phishing'||
 // ── SpiderFoot-style force-directed detonation graph (self-contained; no external lib) ──
 const GRAPH={raf:null,nodes:[],edges:[],idx:{},svg:null,drag:null,W:880,H:460};
 const G_COL={root:'#4a9eda',hop:'#939ea8',final:'#3fb27f',exfil:'#d95f57',telegram:'#d072b0',ioc:'#9b8cf0'};
-const G_SKIP=/cloudflare|jsdelivr|googleapis|gstatic|googletagmanager|google-analytics|fonts\.|cdnjs|bootstrapcdn|w3\.org|schema\.org|akamai|jquery|cloudflareinsights/i;
+// CDN / analytics / ad-tech / tracking domains — pure noise on a phishing graph; drop them so the picture
+// is the phish flow (specimen → redirects → landing → creds/IOC), not every ad beacon the page loaded.
+const G_SKIP=/cloudflare|jsdelivr|googleapis|gstatic|googletagmanager|google-analytics|googlesyndication|doubleclick|doubleverify|adservice|amazon-adsystem|adsystem|adnxs|adsrvr|adform|2mdn|safeframe|teads|permutive|scorecardresearch|zeustechnology|criteo|taboola|outbrain|moatads|quantserve|rubiconproject|pubmatic|casalemedia|bidswitch|chartbeat|hotjar|mixpanel|newrelic|nr-data|sentry|fonts\.|cdnjs|bootstrapcdn|w3\.org|schema\.org|akamai|jquery|cloudflareinsights|\bads?\b|analytics|\btracking\b|\bpixel\b|\bbeacon\b/i;
 function _ghost(u){ try{ return new URL(u).host||u; }catch(e){ return String(u||'').slice(0,32); } }
+// registrable-ish base domain (collapse hashy ad subdomains + repeated www hosts into ONE node)
+function _baseDomain(h){ const p=String(h||'').toLowerCase().replace(/^www\./,'').split('.').filter(Boolean);
+  if(p.length<=2) return p.join('.');
+  return /^(co|com|net|org|gov|edu|ac)\.[a-z]{2}$/.test(p.slice(-2).join('.')) ? p.slice(-3).join('.') : p.slice(-2).join('.'); }
 function buildGraph(rep){
   const nodes=[],edges=[],seen={};
   const add=(id,label,type,r,url)=>{ if(!seen[id]){ seen[id]={id,label,type,r:r||13,url:url||label}; nodes.push(seen[id]); } return seen[id]; };
@@ -595,9 +708,15 @@ function buildGraph(rep){
   ((rep.network||{}).relay_to||[]).forEach((h,i)=>{ const n=add('r'+i,h,'exfil',13,h); if(finalN)edges.push({from:finalN.id,to:n.id,label:'AiTM relay'}); });
   // Telegram exfil bots (copy the bot id)
   ((rep.exfil||{}).telegram||[]).forEach((t,i)=>{ const n=add('tg'+i,'TG '+String(t.bot_id||''),'telegram',13,String(t.bot_id||'')); if(finalN)edges.push({from:finalN.id,to:n.id,label:'exfil'}); });
-  // off-host IOC domains (skip the specimen host + common CDN/analytics noise)
-  [...new Set(((rep.iocs||{}).domains||[]).filter(d=>d && d!==specHost && !G_SKIP.test(d)))].slice(0,8)
-    .forEach((d,i)=>{ const n=add('io'+i,d,'ioc',11,d); if(finalN)edges.push({from:finalN.id,to:n.id,label:''}); });
+  // off-host IOC domains — skip the specimen, CDN/ad/analytics noise, and DEDUP by base domain (so a
+  // dozen hashy ad subdomains / repeated www hosts collapse to one node), then cap so it stays readable.
+  const specBase=_baseDomain(specHost), iocSeen=new Set(), iocList=[];
+  ((rep.iocs||{}).domains||[]).forEach(d=>{
+    if(!d || G_SKIP.test(d)) return;
+    const bd=_baseDomain(d); if(bd===specBase || iocSeen.has(bd)) return;
+    iocSeen.add(bd); iocList.push(bd);
+  });
+  iocList.slice(0,6).forEach((d,i)=>{ const n=add('io'+i,d,'ioc',11,d); if(finalN)edges.push({from:finalN.id,to:n.id,label:''}); });
   return {nodes,edges};
 }
 // click a node (vs drag) → copy its URL, with a brief note flash
@@ -610,8 +729,8 @@ function _gcopy(node){
 function _gpt(ev){ const r=GRAPH.svg.getBoundingClientRect(); return {x:(ev.clientX-r.left)/r.width*GRAPH.W, y:(ev.clientY-r.top)/r.height*GRAPH.H}; }
 function _gstep(){
   const {nodes,edges,idx,W,H}=GRAPH; let ke=0;
-  for(let i=0;i<nodes.length;i++)for(let j=i+1;j<nodes.length;j++){ const a=nodes[i],b=nodes[j]; let dx=a.x-b.x,dy=a.y-b.y,d2=dx*dx+dy*dy||1,d=Math.sqrt(d2); const f=6500/d2,fx=f*dx/d,fy=f*dy/d; a.vx+=fx;a.vy+=fy;b.vx-=fx;b.vy-=fy; }
-  edges.forEach(e=>{ const a=idx[e.from],b=idx[e.to]; if(!a||!b)return; let dx=b.x-a.x,dy=b.y-a.y,d=Math.sqrt(dx*dx+dy*dy)||1; const f=(d-175)*0.02,fx=f*dx/d,fy=f*dy/d; a.vx+=fx;a.vy+=fy;b.vx-=fx;b.vy-=fy; });
+  for(let i=0;i<nodes.length;i++)for(let j=i+1;j<nodes.length;j++){ const a=nodes[i],b=nodes[j]; let dx=a.x-b.x,dy=a.y-b.y,d2=dx*dx+dy*dy||1,d=Math.sqrt(d2); const f=8800/d2,fx=f*dx/d,fy=f*dy/d; a.vx+=fx;a.vy+=fy;b.vx-=fx;b.vy-=fy; }
+  edges.forEach(e=>{ const a=idx[e.from],b=idx[e.to]; if(!a||!b)return; let dx=b.x-a.x,dy=b.y-a.y,d=Math.sqrt(dx*dx+dy*dy)||1; const f=(d-185)*0.02,fx=f*dx/d,fy=f*dy/d; a.vx+=fx;a.vy+=fy;b.vx-=fx;b.vy-=fy; });
   nodes.forEach(n=>{ n.vx+=(W/2-n.x)*0.008; n.vy+=(H/2-n.y)*0.008; n.vx*=0.85; n.vy*=0.85; if(n!==GRAPH.drag){ n.x+=n.vx; n.y+=n.vy; } n.x=Math.max(n.r+4,Math.min(W-n.r-4,n.x)); n.y=Math.max(n.r+4,Math.min(H-n.r-16,n.y)); ke+=n.vx*n.vx+n.vy*n.vy; });
   return ke;
 }
@@ -635,7 +754,7 @@ function renderGraph(rep){
   svg.innerHTML=`<defs><marker id="arr" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6" fill="#3a4653"/></marker></defs>`
     +edges.map((e,i)=>`<line class="g-edge" data-e="${i}" marker-end="url(#arr)"></line>`).join('')
     +edges.map((e,i)=>`<text class="g-elab" data-e="${i}">${esc(e.label||'')}</text>`).join('')
-    +nodes.map((n,i)=>`<g class="g-node" data-n="${i}"><circle r="${n.r}" fill="${G_COL[n.type]||'#888'}"></circle><text class="g-lab" dy="${n.r+13}">${esc(n.label)}</text></g>`).join('');
+    +nodes.map((n,i)=>`<g class="g-node" data-n="${i}"><circle r="${n.r}" fill="${G_COL[n.type]||'#888'}"></circle><text class="g-lab" dy="${n.r+13}">${esc(n.label.length>28?n.label.slice(0,26)+'…':n.label)}</text></g>`).join('');
   const present=new Set(nodes.map(n=>n.type));
   $('#graphlegend').innerHTML=Object.entries({root:'specimen',hop:'redirect',final:'landing',exfil:'creds go here',telegram:'telegram exfil',ioc:'off-host IOC'}).filter(([k])=>present.has(k)).map(([k,v])=>`<span class="g-leg"><i style="background:${G_COL[k]}"></i>${v}</span>`).join('');
   svg.querySelectorAll('.g-node').forEach(el=>{ el.addEventListener('mousedown',ev=>{ ev.preventDefault(); GRAPH.drag=nodes[+el.dataset.n]; GRAPH._downXY=[ev.clientX,ev.clientY]; GRAPH._moved=false; if(!GRAPH.raf) GRAPH.raf=requestAnimationFrame(_gtick); }); });
@@ -791,6 +910,8 @@ function render(rep){
               const b=inapp.includes(x.key)?`<div style="margin-top:6px"><button class="cbtn rep" onclick="startReport('${x.key}','${esc(x.name).replace(/'/g,'')}')">report in-app ▶</button></div>`:'';
               return `<li style="word-break:normal;overflow-wrap:break-word"><a href="${esc(x.url)}" target="_blank">${esc(x.name)}</a> <span style="color:var(--faint)">— ${esc(x.note)}</span>${b}</li>`;
             }).join('')}</ul>`+
+            `<div class="kv" style="margin-top:10px"><span class="k">screenshot the verdict</span></div>`+
+            `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:2px"><button class="cbtn rep" onclick="startReportLink('virustotal','${jsq(rep.url)}')" title="Open VirusTotal, submit this URL, screenshot the verdict">VirusTotal ▶</button><button class="cbtn rep" onclick="startReportLink('fortiguard','${jsq(rep.url)}')" title="Open FortiGuard, rate/submit this URL, screenshot it">FortiGuard ▶</button></div>`+
             ptPromptHtml(rep.url);
         }).catch(()=>{});
       }
@@ -829,7 +950,7 @@ function render(rep){
   const dc=rep.decloak||{}; const mv=dc.multi_vantage||{}; const vps=dc.vantages||[];
   let mvhtml='';
   if(vps.length){
-    mvhtml = `<div class="kv"><span class="k">IP/geo cloaking</span><span class="v" style="${mv.cloaked?'color:var(--bad)':'color:var(--ok)'}">${mv.cloaked?('YES — '+esc((mv.diffs||[]).join(', '))):'no — consistent'}</span></div>`
+    mvhtml = `<div class="kv"><span class="k">IP/geo cloaking</span><span class="v" style="word-break:normal;overflow-wrap:break-word;${mv.cloaked?'color:var(--bad)':'color:var(--ok)'}">${mv.cloaked?('YES — serves different content by network: '+esc((mv.diffs||[]).join(', '))):'no — consistent across vantages'}</span></div>`
       + `<ul class="list">${vps.map(p=>{const up=p.status&&p.status<400&&!p.reason;return `<li class="tel-row"><b>${esc(p.label)}</b> ${p.status?('· '+p.status):''} ${up?'':'<span style="color:var(--warn)">'+esc(p.reason||'down')+'</span>'} ${p.title?'· '+esc(p.title.slice(0,42)):''}</li>`;}).join('')}</ul>`;
   }
   // extra cloaking axes
@@ -956,12 +1077,16 @@ async function loadInbox(){
     if(!d.enabled || !items.length){ strip.style.display='none'; return; }   // only show when there's mail
     strip.style.display='block';
     $('#inbox-note').textContent = `${items.length} received · every ${d.interval}s`;
-    $('#inbox-list').innerHTML = items.map((it,i)=>
-      `<div class="mail-row" onclick="openIntake('${it.sid||''}')">
-        <div class="mu"><div class="u">${esc(it.url)}</div>
-          <div style="color:var(--faint);font-size:11px;margin-top:2px">from ${esc(it.from||'?')} · ${ago(it.at)} · auto-detonated</div></div>
-        <div class="mv" id="inbox-v-${i}" style="color:var(--muted)">…</div>
-        <button class="cbtn" title="false positive — dismiss" onclick="event.stopPropagation();dismissMail('${encodeURIComponent(it.url)}')">✕ FP</button></div>`).join('');
+    const sig=JSON.stringify(items.map(it=>[it.url,it.from,it.sid]));
+    if(sig!==window._inboxSig){                                // only redraw the list when the mail set changed
+      window._inboxSig=sig;
+      $('#inbox-list').innerHTML = items.map((it,i)=>
+        `<div class="mail-row" onclick="openIntake('${it.sid||''}')">
+          <div class="mu"><div class="u">${esc(it.url)}</div>
+            <div style="color:var(--faint);font-size:11px;margin-top:2px">from ${esc(it.from||'?')} · ${ago(it.at)} · auto-detonated</div></div>
+          <div class="mv" id="inbox-v-${i}" style="color:var(--muted)">…</div>
+          <button class="cbtn" title="false positive — dismiss" onclick="event.stopPropagation();dismissMail('${encodeURIComponent(it.url)}')">✕ FP</button></div>`).join('');
+    }
     items.forEach(async (it,i)=>{ if(!it.sid) return;
       try{ const s=await (await fetch('/api/session/'+it.sid)).json(); const v=(s.report||{}).verdict;
         const el=document.getElementById('inbox-v-'+i); if(!el) return;
@@ -995,7 +1120,11 @@ async function openIntake(sid){
     }
   }catch(e){}
 }
-async function loadTracker(force){ try{ const d=await (await fetch('/api/tracker')).json(); renderSidebarCases(d.sites||[]);
+async function loadTracker(force){ try{ const d=await (await fetch('/api/tracker')).json();
+  const sig=JSON.stringify(d.sites||[]);
+  if(!force && sig===window._trackerSig) return;               // unchanged → don't touch the DOM (no flicker)
+  window._trackerSig=sig;
+  renderSidebarCases(d.sites||[]);
   if(!force && document.querySelector('.case.open')) return;   // don't clobber an open per-vantage view
   renderTracker(d); }catch(e){} }
 function renderSidebarCases(sites){

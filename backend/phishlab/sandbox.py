@@ -294,6 +294,22 @@ def _merge_ip(report: dict) -> None:
             ips.insert(0, ip)
 
 
+# free / shared-hosting parents whose registrable-domain AGE says nothing about the phishing subdomain that
+# lives on them (a phish gets a fresh <victim>.<provider> for free) — used to disarm the age down-weight.
+_SHARED_HOSTING = (
+    "mystagingwebsite.com", "wpengine.com", "wordpress.com", "weebly.com", "wixsite.com", "square.site",
+    "github.io", "gitlab.io", "glitch.me", "herokuapp.com", "netlify.app", "vercel.app", "pages.dev",
+    "web.app", "firebaseapp.com", "blogspot.com", "r2.dev", "workers.dev", "azurewebsites.net",
+    "000webhostapp.com", "godaddysites.com", "myshopify.com", "webflow.io", "framer.app", "replit.app",
+    "onrender.com", "surge.sh", "duckdns.org", "clickfunnels.com", "myclickfunnels.com",
+)
+
+
+def _is_shared_hosting(host: str) -> bool:
+    h = (host or "").lower().strip(".")
+    return any(h == p or h.endswith("." + p) for p in _SHARED_HOSTING)
+
+
 def _verdict(r: dict) -> dict:
     # a known-legitimate domain (microsoft.com etc.) is not phishing — don't let brand/login/secret
     # signals on the real site produce a false verdict.
@@ -324,6 +340,16 @@ def _verdict(r: dict) -> dict:
     if brands:
         score += 15
         reasons.append("brand impersonation: " + ", ".join(brands))
+    # a brand-impersonating CREDENTIAL page — a known brand in the title (real brand domains are allowlisted
+    # above, so this host is NOT the real site) + a login/password form we detected or filled — is hard
+    # phishing on its own: a bank/portal clone harvesting creds to its own backend needn't POST off-site or
+    # embed Telegram to be a phish (that's exactly how the DBS-login clone evaded the old scoring).
+    cred_form = (any(s.get("action") == "fill+submit" for s in r["steps"])
+                 or any(f.get("has_password") for s in r["steps"] for f in (s.get("forms") or [])))
+    brand_login = bool(brands) and cred_form
+    if brand_login:
+        score += 22
+        reasons.append(f"brand-impersonating credential form ({', '.join(brands)}) on a non-brand domain")
     for sc, rs in E.score_signals(r.get("enrichment") or {}):
         score += sc
         reasons.append(rs)
@@ -344,10 +370,15 @@ def _verdict(r: dict) -> dict:
               or ((en.get("safebrowsing") or {}).get("listed")))
     hard = bool(r["exfil"]["telegram"] or any(s.get("off_site") for s in r["steps"])
                 or (r.get("kit") or {}).get("found") or (en.get("aitm") or {}).get("toolkit")
-                or listed or dc.startswith("cloaked"))
-    if not hard and isinstance(age, int) and age > 180 and score < 80:
+                or listed or dc.startswith("cloaked") or brand_login)
+    # the age down-weight is fooled by shared-hosting / free subdomains (the OLD parent domain is 'established'
+    # but the phishing subdomain is attacker-controlled & free) — don't trust registrable-domain age there.
+    shared = _is_shared_hosting(host)
+    if not hard and not shared and isinstance(age, int) and age > 180 and score < 80:
         score = min(score, 18)
         reasons.append(f"[down-weighted: established domain ({age}d) with no exfil/kit/toolkit/blocklist evidence]")
+    elif shared and score >= 20:
+        reasons.append(f"[on shared/free hosting ({host.split('.', 1)[-1] if '.' in host else host}) — parent-domain age ignored]")
     score = min(score, 100)
     label = ("confirmed_phishing" if score >= 80 else
              "likely_phishing" if score >= 45 else

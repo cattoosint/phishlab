@@ -56,6 +56,24 @@ def _cfg() -> tuple[str, str]:
     return os.getenv("GMAIL_USER") or "", os.getenv("GMAIL_APP_PASSWORD") or ""
 
 
+# Only ACT on intake mail from a trusted SOC sender — the box also receives UptimeRobot / Google Alerts /
+# LinkedIn / newsletters, which must never be auto-detonated. Default: SOC ALERTS (SOC@example.com).
+# Override/extend via MAIL_INTAKE_SENDERS (comma-separated); a bare "@domain" entry trusts a whole domain.
+_INTAKE_SENDERS = {s.strip().lower() for s in
+                   (os.getenv("MAIL_INTAKE_SENDERS") or "SOC@example.com").split(",") if s.strip()}
+
+
+def _sender_allowed(frm: str) -> bool:
+    from email.utils import parseaddr
+    addr = (parseaddr(frm or "")[1] or "").strip().lower()
+    if not _INTAKE_SENDERS:
+        return True                                  # empty allowlist = accept all (explicit opt-out)
+    if addr in _INTAKE_SENDERS:
+        return True
+    dom = addr.split("@")[-1] if "@" in addr else ""
+    return bool(dom) and any(a.startswith("@") and dom == a[1:] for a in _INTAKE_SENDERS)
+
+
 def enabled() -> bool:
     u, p = _cfg()
     return bool(u and p)
@@ -130,6 +148,8 @@ def _poll_once() -> list[dict]:
             full = md[0][1]
             hdr = email.message_from_bytes(full)
             subj, frm = _decode(hdr.get("Subject")), _decode(hdr.get("From"))
+            if not _sender_allowed(frm):                       # only trusted SOC sender (SOC@example.com)
+                continue                                       # ignore UptimeRobot / alerts / newsletters
             found: list[tuple[str, str]] = []
             body_links: list[tuple[str, str]] = []
             surl = subject_url(subj)                          # mode 1: a link-only subject

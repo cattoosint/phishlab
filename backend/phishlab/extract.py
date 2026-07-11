@@ -24,6 +24,11 @@ BRANDS = (
     "gmail", "facebook", "instagram", "netflix", "dhl", "fedex", "ups", "usps", "chase", "wellsfargo",
     "bankofamerica", "hsbc", "barclays", "santander", "coinbase", "binance", "metamask", "docusign",
     "adobe", "linkedin", "whatsapp", "telegram", "steam", "roblox", "oracle", "att", "verizon",
+    # SG / APAC banks + gov + common local lures (SOC Team threat model)
+    "dbs", "posb", "ocbc", "uob", "maybank", "citibank", "standardchartered", "standard chartered",
+    "cimb", "singpass", "singtel", "starhub", "shopee", "lazada", "revolut", "stripe",
+    # cloud / file-share lures phishing routinely impersonates
+    "sharepoint", "onedrive", "dropbox", "wetransfer",
 )
 
 
