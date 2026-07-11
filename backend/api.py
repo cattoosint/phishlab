@@ -605,11 +605,11 @@ async def report_capture(sid: str):
     return {"ok": True, "state": s.state}
 
 
-@app.get("/api/report/for")
-async def report_for(url: str):
-    """Scanner artifacts (VT/HA/FortiGuard screenshots + parsed score/hash) captured for this URL — feeds
-    the detonation report's evidence gallery."""
-    return {"reports": RPT.REPORT_INDEX.get(RPT._norm_url(url or ""), [])}
+@app.get("/api/report/recent")
+async def report_recent():
+    """Latest VT / Hybrid Analysis / FortiGuard capture per service (recent) — screenshot + permalink +
+    parsed score + real file hashes — feeds the detonation report's evidence gallery."""
+    return {"reports": RPT.recent_reports()}
 
 
 @app.get("/api/report/{sid}/shot")

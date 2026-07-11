@@ -27,6 +27,7 @@ import re
 import threading
 import time
 import uuid
+import hashlib
 from io import BytesIO
 
 from . import net_guard as G
@@ -40,13 +41,29 @@ except Exception:
 REPORTS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "reports")
 HUMAN_TIMEOUT = int(os.getenv("PHISH_REPORT_TIMEOUT") or "600")     # max wait for the human to finish (s)
 
-# normalized target-URL -> [{service, service_label, shot_url, result, at, id}] so a detonation report can
-# surface the VT/HA/FortiGuard screenshots captured for that same URL (the "evidence" gallery).
-REPORT_INDEX: dict[str, list] = {}
+# flat log of every scanner capture (newest last) so the detonation report's evidence gallery can show the
+# latest VT/HA/FortiGuard screenshot per service. File reports carry the ACTUAL file hashes (not scraped).
+REPORTS_LOG: list[dict] = []
+_LOG_CAP = 60
 
 
 def _norm_url(u: str) -> str:
     return (u or "").split("#")[0].rstrip("/").lower()
+
+
+def recent_reports(max_age_s: int = 3600) -> list[dict]:
+    """Latest capture per service within max_age_s — the VirusTotal / FortiGuard / Hybrid Analysis columns."""
+    cutoff = 0.0
+    try:
+        cutoff = REPORTS_LOG[-1]["at"] - max_age_s if REPORTS_LOG else 0.0
+    except Exception:
+        cutoff = 0.0
+    latest: dict[str, dict] = {}
+    for e in REPORTS_LOG:
+        if e.get("at", 0) >= cutoff:
+            latest[e["service"]] = e          # later entries overwrite → newest per service
+    order = {"virustotal": 0, "hybrid": 1, "fortiguard": 2}
+    return sorted(latest.values(), key=lambda e: order.get(e["service"], 9))
 
 SERVICES: dict[str, dict] = {
     "virustotal": {
@@ -109,15 +126,33 @@ try{
 }catch(_){ return false; }
 """
 
-# find a file <input type=file> anywhere (incl. shadow roots) so we can hand it the attachment
-_DEEP_FILE_JS = r"""
+# deep-find the FIRST <input type=file> across shadow roots, un-hide it, and RETURN the element so Selenium
+# can send_keys() the path. VT's upload input lives inside a web-component shadow root (hidden by default).
+_FIND_FILE_INPUT_JS = r"""
+function walk(root){
+  var f=root.querySelector('input[type=file]'); if(f) return f;
+  var els=root.querySelectorAll('*');
+  for(var i=0;i<els.length;i++){ if(els[i].shadowRoot){ var r=walk(els[i].shadowRoot); if(r) return r; } }
+  return null;
+}
+var f=walk(document);
+if(f){ try{ f.style.display='block'; f.style.visibility='visible'; f.style.opacity=1;
+            f.removeAttribute('hidden'); f.style.width='1px'; f.style.height='1px'; }catch(_){} }
+return f;
+"""
+
+# click a 'Confirm upload' / 'Upload file' control (VT shows one for a known-hash file), across shadow roots
+_CONFIRM_UPLOAD_JS = r"""
 function walk(root, acc){
-  try{ root.querySelectorAll('input[type=file]').forEach(function(e){acc.push(e);}); }catch(_){ }
+  try{ root.querySelectorAll('button,[role=button],vt-ui-button,input[type=submit],a').forEach(function(e){acc.push(e);}); }catch(_){ }
   try{ root.querySelectorAll('*').forEach(function(e){ if(e.shadowRoot) walk(e.shadowRoot, acc); }); }catch(_){ }
   return acc;
 }
-window.__pl_file_inputs = walk(document, []);
-return window.__pl_file_inputs.length;
+var rx=/confirm upload|upload file|reanalyz|analyse file|analyze file|proceed|continue/i;
+var els=walk(document,[]);
+for(var i=0;i<els.length;i++){ var e=els[i], t=(e.innerText||e.textContent||e.value||'').trim();
+  try{ if(t&&rx.test(t)&&e.offsetParent!==null){ e.click(); return t.slice(0,40); } }catch(_){} }
+return null;
 """
 
 # whole rendered text across shadow roots — for robust field extraction without brittle selectors.
@@ -206,13 +241,20 @@ class ReportSession:
         self.url = url
         self.file_bytes = file_bytes
         self.file_name = file_name
+        # the hashes of the ACTUAL file (computed from the bytes — NOT scraped off the scanner page)
+        self.file_hashes = {} if not file_bytes else {
+            "md5": hashlib.md5(file_bytes).hexdigest(),
+            "sha1": hashlib.sha1(file_bytes).hexdigest(),
+            "sha256": hashlib.sha256(file_bytes).hexdigest(),
+        }
         cfg = SERVICES[service]
         self.state = "starting"     # starting|loading|awaiting_human|ready|capturing|done|error|cancelled
         self.report = {
             "kind": "report", "service": service, "service_label": cfg["label"],
             "target": url or file_name or "", "target_kind": "file" if file_bytes else "url",
-            "started_at": time.time(), "narration": [], "human_needed": None,   # None|'captcha'|'submit'
-            "result": {}, "shot_url": None, "captured_at": None, "engine": "seleniumbase",
+            "file_hashes": self.file_hashes, "started_at": time.time(), "narration": [],
+            "human_needed": None,   # None|'captcha'|'submit'
+            "result": {}, "shot_url": None, "permalink": None, "captured_at": None, "engine": "seleniumbase",
         }
         self.latest_frame: bytes | None = None
         self.viewport = {"width": 1280, "height": 720}
@@ -304,6 +346,11 @@ class ReportSession:
     # ── submission per service ──
     def _navigate_and_prefill(self, sb) -> None:
         cfg = SERVICES[self.service]
+        # VirusTotal FILE report: try the file's HASH report first — if VT already has the file it shows the
+        # verdict instantly (no upload, no CAPTCHA). Most phishing attachments are already known.
+        if self.file_bytes and self.service == "virustotal" and self.file_hashes.get("sha256"):
+            if self._vt_file_by_hash(sb):
+                return
         page = cfg["upload_page"] if (self.file_bytes and cfg.get("supports_file")) else cfg["url_page"]
         self.state = "loading"
         self._log(f"Opening {cfg['label']} — {page}")
@@ -322,6 +369,30 @@ class ReportSession:
             self._prefill_file(sb)
         elif self.url:
             self._prefill_url(sb)
+
+    def _vt_file_by_hash(self, sb) -> bool:
+        """Open VirusTotal's report for the file's SHA256 directly. True if VT KNOWS the file (report showing)
+        — no upload needed; False if unknown (caller falls back to the upload form)."""
+        h = self.file_hashes["sha256"]
+        self.state = "loading"
+        self._log(f"VirusTotal: looking up the file by SHA256 (skips upload if it's already known) — {h}")
+        try:
+            sb.uc_open_with_reconnect(f"https://www.virustotal.com/gui/file/{h}", reconnect_time=5)
+        except Exception:
+            try:
+                sb.open(f"https://www.virustotal.com/gui/file/{h}")
+            except Exception:
+                return False
+        self._wait(sb, 4)
+        if self._still_captcha(sb):
+            self._try_basic_captcha(sb)
+            self._wait(sb, 2)
+        b = self._deep_text(sb)
+        if bool(_VENDOR_RE.search(b)) or "no security vendors flagged" in b:
+            self._log("VirusTotal already has this file — showing its report.")
+            return True
+        self._log("VirusTotal hasn't seen this file — uploading it instead.")
+        return False
 
     def _prefill_url(self, sb) -> None:
         ok = False
@@ -356,24 +427,30 @@ class ReportSession:
             self.report["human_needed"] = "submit"
             self._log("Couldn't stage the file — upload it manually in the window.")
             return
+        self.report["staged_file"] = tmp
+        el = None
         try:
-            n = sb.execute_script(_DEEP_FILE_JS)
-            if n:
-                sb.execute_script("window.__pl_file_inputs[0].style.display='block';"
-                                  "window.__pl_file_inputs[0].removeAttribute('hidden');")
-                sb.driver.execute_script(
-                    "arguments[0].scrollIntoView();", sb.execute_script(
-                        "return window.__pl_file_inputs[0];"))
-                el = sb.driver.execute_script("return window.__pl_file_inputs[0];")
-                el.send_keys(tmp)
-                self._log(f"Attached {safe} to the upload form — confirm/submit in the window if prompted.")
+            el = sb.driver.execute_script(_FIND_FILE_INPUT_JS)     # deep-find + un-hide + return the element
+        except Exception:
+            el = None
+        if el is not None:
+            try:
+                el.send_keys(tmp)                                  # hand the OS path to the file input
+                self._log(f"Selected {safe} in the upload form.")
                 self._wait(sb, 3)
-            else:
-                self.report["human_needed"] = "submit"
-                self._log("No file input found — upload the file manually in the window.")
-        except Exception as exc:
-            self.report["human_needed"] = "submit"
-            self._log(f"File attach fell back to manual ({type(exc).__name__}). Upload it in the window.")
+                try:
+                    clicked = sb.execute_script(_CONFIRM_UPLOAD_JS)   # VT shows 'Confirm upload' for a known file
+                    if clicked:
+                        self._log(f"Clicked '{clicked}' to upload.")
+                        self._wait(sb, 3)
+                except Exception:
+                    pass
+                return
+            except Exception as exc:
+                self._log(f"Auto-select failed ({type(exc).__name__}).")
+        # couldn't attach automatically → give the analyst the exact path to pick manually
+        self.report["human_needed"] = "submit"
+        self._log(f"Couldn't auto-attach — in the window click 'Choose file' and pick:  {tmp}")
 
     # ── results detection + capture ──
     def _browser_alive(self, sb) -> bool:
@@ -419,19 +496,24 @@ class ReportSession:
             self.report["result"] = _extract_fields(self.service, sb.execute_script(_DEEP_TEXT_JS) or "", self.url or "")
         except Exception:
             self.report["result"] = {}
+        # for a FILE report, the hash is the FILE's OWN (from its bytes), NOT whatever 32/64-hex string
+        # happened to be scraped off the scanner page.
+        if self.file_hashes:
+            self.report["result"].update(self.file_hashes)
         try:
-            self.report["final_url"] = sb.get_current_url()
+            self.report["permalink"] = sb.get_current_url()      # the VirusTotal/HA/FortiGuard report link
         except Exception:
             pass
         self.report["captured_at"] = time.time()
         r = self.report["result"]
-        # index this artifact by the target URL so the detonation report's evidence gallery can pull it in
-        if self.report.get("shot_url") and self.url:
-            lst = REPORT_INDEX.setdefault(_norm_url(self.url), [])
-            lst[:] = [e for e in lst if e.get("service") != self.service]     # newest per service wins
-            lst.append({"service": self.service, "service_label": self.report["service_label"],
-                        "shot_url": self.report["shot_url"], "result": r,
-                        "at": self.report["captured_at"], "id": self.id})
+        # append to the flat log so the detonation report's evidence gallery shows the latest per service
+        if self.report.get("shot_url"):
+            REPORTS_LOG.append({
+                "service": self.service, "service_label": self.report["service_label"],
+                "shot_url": self.report["shot_url"], "permalink": self.report.get("permalink"),
+                "target": self.report["target"], "target_kind": self.report["target_kind"],
+                "file_hashes": self.file_hashes, "result": r, "at": self.report["captured_at"], "id": self.id})
+            del REPORTS_LOG[:-_LOG_CAP]
         self._log("Captured. " + (f"{r.get('score','')} · {r.get('sha256','') or r.get('md5','')}".strip(" ·")
                                   or "screenshot saved — open it to read the score/hash."))
 

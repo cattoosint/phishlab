@@ -83,8 +83,14 @@
   .ev-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px}
   .ev-tile{display:block;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--bg);text-decoration:none;color:inherit}
   .ev-tile img{width:100%;display:block;background:#fff;cursor:zoom-in;aspect-ratio:16/10;object-fit:cover;object-position:top}
+  .ev-tile>a{display:block}
   .ev-tile .cap{padding:7px 10px;font-size:12px;color:var(--text);border-top:1px solid var(--line);display:flex;justify-content:space-between;gap:8px;align-items:baseline}
-  .ev-tile .cap span{color:var(--faint);font-size:11px;font-family:var(--mono);white-space:nowrap}
+  .ev-tile .cap .lab{font-weight:600}
+  .ev-tile .cap span:not(.lab){color:var(--faint);font-size:11px;font-family:var(--mono);white-space:nowrap}
+  .ev-tile .ev-hash{padding:6px 10px;font-family:var(--mono);font-size:10px;color:var(--faint);border-top:1px solid var(--line);word-break:break-all;line-height:1.5}
+  .ev-tile .ev-foot{padding:6px 10px;border-top:1px solid var(--line)}
+  .ev-link{font-size:11px;color:var(--accent);text-decoration:none}
+  .ev-link:hover{text-decoration:underline}
   .trk.taken{border-left-color:var(--bad);background:rgba(217,95,87,.06)}
   .case{margin-bottom:8px}
   .case .trk{margin-bottom:0;cursor:pointer}
@@ -758,16 +764,23 @@ async function renderEvidence(rep){
   const tiles=[];
   if(rep.login_screenshot){                                               // the clean login page, before creds
     const src='data:image/jpeg;base64,'+rep.login_screenshot;
-    tiles.push(`<a class="ev-tile" href="${src}" target="_blank"><img src="${src}"><div class="cap">Login page <span>pre-creds</span></div></a>`);
+    tiles.push(`<div class="ev-tile"><a href="${src}" target="_blank"><img src="${src}"></a><div class="cap"><span class="lab">Login page</span><span>pre-creds</span></div></div>`);
   }
   let reports=[];
-  try{ reports=((await (await fetch('/api/report/for?url='+encodeURIComponent(rep.url||''))).json()).reports)||[]; }catch(e){}
-  reports.forEach(r=>{ const res=r.result||{}, extra=res.score?res.score+' vendors':(res.category?'cat: '+res.category:'');
-    tiles.push(`<a class="ev-tile" href="${esc(r.shot_url)}" target="_blank"><img src="${esc(r.shot_url)}"><div class="cap">${esc(r.service_label||r.service)}${extra?' <span>'+esc(extra)+'</span>':''}</div></a>`); });
+  try{ reports=((await (await fetch('/api/report/recent')).json()).reports)||[]; }catch(e){}
+  reports.forEach(r=>{
+    const res=r.result||{}, fh=r.file_hashes||{}, meta=[];
+    if(res.score) meta.push(res.score+' vendors'); if(res.category) meta.push('cat: '+res.category);
+    const hashLine=(r.target_kind==='file'&&(fh.sha256||fh.md5))
+      ? `<div class="ev-hash">sha256 ${esc(fh.sha256||'')}${fh.md5?'<br>md5&nbsp;&nbsp;&nbsp;'+esc(fh.md5):''}</div>` : '';
+    const link=r.permalink?`<div class="ev-foot"><a href="${esc(r.permalink)}" target="_blank" class="ev-link">open ${esc(r.service_label||r.service)} report ↗</a></div>`:'';
+    tiles.push(`<div class="ev-tile"><a href="${esc(r.shot_url)}" target="_blank"><img src="${esc(r.shot_url)}"></a>`+
+      `<div class="cap"><span class="lab">${esc(r.service_label||r.service)}</span>${meta.length?'<span>'+esc(meta.join(' · '))+'</span>':''}</div>${hashLine}${link}</div>`);
+  });
   if(!tiles.length){ card.style.display='none'; return; }
   card.style.display=''; $('#evcount').textContent=tiles.length+' item'+(tiles.length===1?'':'s');
   box.innerHTML=`<div class="ev-grid">${tiles.join('')}</div>`+
-    (reports.length?'':'<div class="hint" style="margin-top:9px">Run <b>VirusTotal / FortiGuard / Hybrid Analysis</b> from the Takedown card to add scanner screenshots here.</div>');
+    (reports.length?'':'<div class="hint" style="margin-top:9px">Run <b>VirusTotal / FortiGuard / Hybrid Analysis</b> (Takedown card, or the email view) to add scanner screenshots, hashes & report links here.</div>');
 }
 function renderGraph(rep){
   const card=$('#redirectcard'), svg=$('#graphsvg'); if(!card||!svg) return;
