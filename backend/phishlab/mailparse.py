@@ -11,6 +11,7 @@ detonation host.
 from __future__ import annotations
 
 import hashlib
+import html
 import io
 import logging
 import re
@@ -37,15 +38,38 @@ def _clean(u: str) -> str:
     return (u or "").rstrip(".,);:'\"]}>").strip()
 
 
+# embedded-asset / tracking-pixel URLs (logos, open-trackers, fonts, stylesheets) — never the phishing
+# destination, so drop them from the detonation candidate list to keep the analyst's view clean.
+_ASSET_RE = re.compile(r"\.(?:png|jpe?g|gif|svg|webp|ico|bmp|tiff?|css|woff2?|ttf|eot|otf)(?:\?|#|$)", re.I)
+
+
+def _is_asset(url: str) -> bool:
+    return bool(_ASSET_RE.search(url or ""))
+
+
+def _find_urls(text: str) -> set[str]:
+    """Raw URL scan of already-decoded text — caller handles HTML-entity/defang decoding."""
+    out: set[str] = set()
+    for m in _URL_RE.findall(text or ""):
+        c = _clean(m)
+        if c and not _is_asset(c):
+            out.add(c)
+    return out
+
+
 def _urls_from_text(text: str) -> set[str]:
-    text = _refang(text or "")
-    return {_clean(m) for m in _URL_RE.findall(text) if _clean(m)}
+    # decode HTML entities (&amp; → &) FIRST so tracked/wrapped URLs aren't left malformed
+    return _find_urls(_refang(html.unescape(text or "")))
 
 
-def _urls_from_html(html: str) -> set[str]:
-    out = _urls_from_text(html)
-    out |= {_clean(m) for m in _HREF_RE.findall(html or "")}
-    return {u for u in out if u}
+def _urls_from_html(markup: str) -> set[str]:
+    markup = html.unescape(markup or "")
+    out = _find_urls(_refang(markup))
+    for m in _HREF_RE.findall(markup):
+        c = _clean(m)
+        if c and not _is_asset(c):
+            out.add(c)
+    return out
 
 
 def _pdf_links(pdf_bytes: bytes) -> tuple[set[str], set[str]]:
@@ -113,8 +137,9 @@ def _att_kind(name: str, ctype: str) -> str:
     return "other"
 
 
-def _analyze_attachment(name: str, ctype: str, payload: bytes) -> dict:
-    """Hash + classify an attachment and extract candidate URLs from PDFs (text + QR) and HTML."""
+def _analyze_attachment(name: str, ctype: str, payload: bytes, _depth: int = 0) -> dict:
+    """Hash + classify an attachment and extract candidate URLs from PDFs (text + QR), HTML, and (when
+    a phishing email is forwarded AS an attachment) recursively from a nested .eml/.msg."""
     kind = _att_kind(name, ctype)
     sha256 = hashlib.sha256(payload or b"").hexdigest()
     links: list[dict] = []
@@ -127,9 +152,30 @@ def _analyze_attachment(name: str, ctype: str, payload: bytes) -> dict:
     elif kind == "html":
         for u in sorted(_urls_from_html(payload.decode("utf-8", "ignore"))):
             links.append({"url": u, "source": "html", "attachment": name})
+    elif kind == "email" and _depth < 2:            # a phish email forwarded/attached as .eml/.msg
+        try:
+            nested = parse(payload, name, _depth + 1)
+            for lk in nested.get("links", []):
+                links.append({"url": lk["url"], "source": "nested-" + lk.get("source", "link"),
+                              "attachment": name})
+        except Exception:
+            pass
     meta = {"name": name or "(unnamed)", "ctype": ctype or "", "size": len(payload or b""),
             "sha256": sha256, "kind": kind, "link_count": len(links)}
     return {"meta": meta, "links": links, "kind": kind}
+
+
+def _iter_parts(part):
+    """Walk MIME parts, but treat a message/rfc822 sub-message as a TERMINAL (yield it, don't descend)
+    so a phish forwarded as an attached email is recursed into as a unit — not flattened into body text."""
+    if part.get_content_type() == "message/rfc822":
+        yield part
+        return
+    if part.is_multipart():
+        for sub in part.get_payload():
+            yield from _iter_parts(sub)
+    else:
+        yield part
 
 
 def _auth_results(raw: str) -> dict:
@@ -142,7 +188,7 @@ def _auth_results(raw: str) -> dict:
     return {k: v for k, v in out.items() if v}
 
 
-def _parse_eml(data: bytes) -> dict:
+def _parse_eml(data: bytes, _depth: int = 0) -> dict:
     msg = BytesParser(policy=policy.default).parsebytes(data)
     hdr = {k.lower(): str(v) for k, v in msg.items()}
     received = msg.get_all("received") or []
@@ -156,10 +202,27 @@ def _parse_eml(data: bytes) -> dict:
     links: list[dict] = []
     attachments: list[dict] = []
     body_preview = ""
-    for part in msg.walk():
+    for part in _iter_parts(msg):
+        ctype = part.get_content_type()
+        if ctype == "message/rfc822":                       # a phish forwarded AS an attached email
+            if _depth < 2:
+                try:
+                    pl = part.get_payload()
+                    inner = pl[0] if isinstance(pl, list) and pl else None
+                    inner_bytes = inner.as_bytes() if inner is not None else (part.get_payload(decode=True) or b"")
+                    fn = part.get_filename() or "attached-email.eml"
+                    nested = parse(inner_bytes, fn, _depth + 1)
+                    for lk in nested.get("links", []):
+                        links.append({"url": lk["url"], "source": "nested-" + lk.get("source", "link"),
+                                      "attachment": fn})
+                    attachments.append({"name": fn, "ctype": ctype, "size": len(inner_bytes),
+                                        "sha256": hashlib.sha256(inner_bytes).hexdigest(), "kind": "email",
+                                        "link_count": len(nested.get("links", []))})
+                except Exception:
+                    pass
+            continue
         if part.is_multipart():
             continue
-        ctype = part.get_content_type()
         fn = part.get_filename()
         disp = part.get_content_disposition()
         if disp == "attachment" or fn:
@@ -167,7 +230,7 @@ def _parse_eml(data: bytes) -> dict:
                 payload = part.get_payload(decode=True) or b""
             except Exception:
                 payload = b""
-            a = _analyze_attachment(fn or "attachment", ctype, payload)
+            a = _analyze_attachment(fn or "attachment", ctype, payload, _depth)
             attachments.append(a["meta"])
             links.extend(a["links"])
         elif ctype == "text/plain":
@@ -186,7 +249,7 @@ def _parse_eml(data: bytes) -> dict:
     return _finish("email", headers, links, attachments, body_preview)
 
 
-def _parse_msg(data: bytes) -> dict:
+def _parse_msg(data: bytes, _depth: int = 0) -> dict:
     try:
         import extract_msg
     except Exception:
@@ -213,7 +276,7 @@ def _parse_msg(data: bytes) -> dict:
             name = getattr(att, "longFilename", None) or getattr(att, "shortFilename", None) or "attachment"
         except Exception:
             continue
-        a = _analyze_attachment(name, "", payload)
+        a = _analyze_attachment(name, "", payload, _depth)
         attachments.append(a["meta"])
         links.extend(a["links"])
     try:
@@ -223,9 +286,9 @@ def _parse_msg(data: bytes) -> dict:
     return _finish("email", headers, links, attachments, body_preview)
 
 
-def _parse_loose(data: bytes, name: str) -> dict:
+def _parse_loose(data: bytes, name: str, _depth: int = 0) -> dict:
     """A loose attachment uploaded on its own (a .pdf / .html / etc., not wrapped in an email)."""
-    a = _analyze_attachment(name or "file", "", data)
+    a = _analyze_attachment(name or "file", "", data, _depth)
     return _finish("file", {"from": "", "subject": name, "auth": {}}, a["links"], [a["meta"]], "")
 
 
@@ -240,15 +303,16 @@ def _finish(kind: str, headers: dict, links: list[dict], attachments: list[dict]
             "body_preview": body_preview, "link_count": len(uniq)}
 
 
-def parse(data: bytes, filename: str = "") -> dict:
-    """Parse an uploaded .eml / .msg / loose attachment → {kind, headers, links[], attachments[]}."""
+def parse(data: bytes, filename: str = "", _depth: int = 0) -> dict:
+    """Parse an uploaded .eml / .msg / loose attachment → {kind, headers, links[], attachments[]}.
+    Recurses (bounded) into a phish email forwarded AS a .eml/.msg attachment."""
     name = (filename or "").lower().strip()
     try:
         if name.endswith(".msg") or data[:8] == _OLE_MAGIC:
-            return _parse_msg(data)
+            return _parse_msg(data, _depth)
         if name.endswith((".eml", ".txt")) or b"\nReceived:" in data[:8000] or re.match(rb"[\w-]+:\s", data[:200]):
-            return _parse_eml(data)
-        return _parse_loose(data, name)
+            return _parse_eml(data, _depth)
+        return _parse_loose(data, name, _depth)
     except Exception as exc:
         logger.warning("mailparse failed: %s", exc)
         return {"kind": "file", "error": f"{type(exc).__name__}: {exc}"[:160],

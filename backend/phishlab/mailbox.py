@@ -92,7 +92,8 @@ _last_uid = -1   # -1 = not initialised this process; persisted to mail_state.js
 
 
 def _poll_once() -> list[dict]:
-    """Fetch only NEW mail (UID > watermark) whose subject is a link-only URL. Runs in a thread.
+    """Fetch NEW mail (UID > watermark): detonate a link-only subject URL AND any links found in the
+    attachments (PDF text + QR codes, HTML, or a phish forwarded as a .eml/.msg). Runs in a thread.
 
     SAFETY: never touches the existing inbox — no mass mark-read. On the first poll it simply watermarks
     at the current newest UID and processes nothing, so pre-existing mail is ignored entirely. Only mail
@@ -121,15 +122,38 @@ def _poll_once() -> list[dict]:
             if uid <= _last_uid:                               # IMAP 'n:*' can echo the newest — skip it
                 continue
             _last_uid = max(_last_uid, uid)
-            # read ONLY the Subject/From headers (BODY.PEEK = don't mark read, HEADER.FIELDS = no body)
-            typ, md = M.uid("fetch", raw, "(BODY.PEEK[HEADER.FIELDS (SUBJECT FROM)])")
+            # fetch the FULL message (BODY.PEEK = never sets \Seen) — we need the body + attachments so a
+            # phish forwarded/attached as .eml/.msg/.pdf/.html gets parsed the same as a manual upload.
+            typ, md = M.uid("fetch", raw, "(BODY.PEEK[])")
             if not md or not md[0] or not isinstance(md[0], tuple):
                 continue
-            hdr = email.message_from_bytes(md[0][1])
-            url = subject_url(_decode(hdr.get("Subject")))
-            if not url:
-                continue                              # not the link format → never read/store the email
-            out.append({"url": url, "from": _decode(hdr.get("From")), "subject": _decode(hdr.get("Subject"))})
+            full = md[0][1]
+            hdr = email.message_from_bytes(full)
+            subj, frm = _decode(hdr.get("Subject")), _decode(hdr.get("From"))
+            found: list[tuple[str, str]] = []
+            body_links: list[tuple[str, str]] = []
+            surl = subject_url(subj)                          # mode 1: a link-only subject
+            if surl:
+                found.append((surl, "subject"))
+            if len(full) <= 30_000_000:                        # parse attachments (PDF text/QR, HTML, nested email)
+                try:
+                    from . import mailparse as MP
+                    for lk in MP.parse(full, "intake.eml").get("links", []):
+                        src = lk.get("source", "attachment")
+                        if src == "body":                      # the analyst's forwarding note, usually — hold as fallback
+                            body_links.append((lk["url"], src))
+                        else:                                  # mode 2: link from a PDF/HTML/nested attached phish
+                            found.append((lk["url"], src))
+                except Exception:
+                    pass
+            if not found:                                      # nothing attached & no subject URL → treat an inline-
+                found = body_links                             # forwarded phish's body links as the candidates
+            seen = set()
+            for url, source in found:                          # one intake item per distinct link
+                if url in seen:
+                    continue
+                seen.add(url)
+                out.append({"url": url, "from": frm, "subject": subj, "source": source})
         _save_uid()          # persist the advanced watermark so downtime mail isn't lost on a restart
     finally:
         try:
