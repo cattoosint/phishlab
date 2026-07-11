@@ -20,3 +20,6 @@ latest_logs/
 archived_logs/
 assets/
 .pytest_cache/
+
+# Local SOC operational notes — NEVER commit (contains case IOCs / tokens / PII)
+SOC-NOTES.md
