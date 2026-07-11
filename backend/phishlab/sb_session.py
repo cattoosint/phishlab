@@ -375,12 +375,15 @@ class SBSession:
         if X.is_cf_phish_warning(title, html):
             return True
         t = (title or "").lower()
-        b = (html or "").lower()
+        # match RENDERED/VISIBLE text, NOT the raw page source: Cloudflare keeps its hidden challenge-
+        # template text in the DOM even AFTER the challenge is solved, so raw-html matching fired on the
+        # real post-CF landing page and the walk bailed. get_text() only returns what's actually visible.
+        b = self._body(sb) if sb is not None else (html or "").lower()
         if "just a moment" in t or "attention required" in t or "one more step" in t or "before you proceed" in t:
             return True
         if any(k in b for k in self._CF_PHRASES):
             return True
-        return bool(sb is not None and self._has_cf_widget(sb))    # DOM backstop when text is iframe-only
+        return bool(sb is not None and self._has_cf_widget(sb))    # DOM backstop: a VISIBLE Turnstile only
 
     def _solve_cf(self, sb) -> bool:
         """Clear a Cloudflare gate (warning OR challenge). Real-mouse Turnstile solve + retry."""
