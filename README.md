@@ -36,12 +36,15 @@ the phishing kit where exposed, and helps you report it for takedown.
 
 ```
 1.  Install.bat      (one-time setup: environment, dependencies, browsers, Tor)
-2.  PhishLab.bat     (starts the console)   ->   http://127.0.0.1:8090
+2.  start.bat        (starts the console)   ->   http://127.0.0.1:8090
 ```
 
 `Install.bat` needs **Python 3.11+** on PATH and installs everything into a local `.venv`. The default
 detonation engine uses **Google Chrome**, so install Chrome as well (the installer will tell you if it's
-missing). `PhishLab.bat` also self-installs on first run if you skip the installer.
+missing). `start.bat` is the single launcher — it fast-forwards to the latest code on start, kills any
+stale server, prints the running version, then starts Tor + the server (and self-installs on first run if
+you skip the installer). For a headless logon-autostart, point a `shell:startup` shortcut at `start.bat`
+with the env var `PHISH_NO_BROWSER=1`.
 
 Engines: the default is **Chrome / SeleniumBase** (best for Cloudflare). Set `PHISH_ENGINE=camoufox` to
 use the **Camoufox** (real-fingerprint Firefox) engine instead — kept as a proxy / decloak fallback.
@@ -75,7 +78,7 @@ console also ships built-in offline fixtures: `/demo-phish/`, `/demo-lead/`, `/d
 ## Layout
 
 ```
-Install.bat · PhishLab.bat        # Windows installer + launcher (native, no Docker needed)
+Install.bat · start.bat           # Windows installer + the single launcher (native, no Docker needed)
 run_server.py                     # server entrypoint (sets the Windows event-loop policy)
 backend/
   api.py                          # local API + serves the single-page console

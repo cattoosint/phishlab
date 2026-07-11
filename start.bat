@@ -4,11 +4,15 @@ title PhishLab
 cd /d "%~dp0"
 
 REM ============================================================
-REM  start.bat — the ONE launcher. Double-click to run PhishLab.
-REM  It always runs the UPDATED version: pulls the latest code,
-REM  kills any stale server on the port, then starts Tor + the
-REM  server + opens the console. Close the window to stop.
-REM  (First-time full setup: run Install.bat once.)
+REM  start.bat — THE launcher (the only one). Double-click to run.
+REM  Always runs the UPDATED version: fast-forwards to the latest
+REM  code, kills any stale server on the port, prints the running
+REM  version, then starts Tor + the server + opens the console.
+REM  Close the window to stop.
+REM
+REM  First-time full setup: run Install.bat once.
+REM  Headless logon-autostart: make a shell:startup shortcut to
+REM  this file and set PHISH_NO_BROWSER=1 (skips the browser pop).
 REM ============================================================
 
 set "PORT=8090"

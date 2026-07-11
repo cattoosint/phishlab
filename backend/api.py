@@ -154,7 +154,7 @@ async def update_apply(request: Request):
 @app.post("/api/update/restart")
 async def update_restart(request: Request):
     """Cleanly restart the engine so a pulled backend update takes effect. Exits with code 42 a moment
-    AFTER this response is sent; PhishLab.bat's loop relaunches on 42 (installs without a manual restart)."""
+    AFTER this response is sent; start.bat's loop relaunches on 42 (installs without a manual restart)."""
     if _cross_origin(request):
         return JSONResponse({"error": "cross-origin request blocked"}, status_code=403)
     import threading
