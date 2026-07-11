@@ -24,4 +24,8 @@ cryptography>=42
 python-multipart>=0.0.9
 pymupdf>=1.24          # PDF text/links + render pages to images for QR decode (no poppler needed)
 pyzbar>=0.1.9          # decode QR codes (Windows wheel bundles the zbar DLL)
-extract-msg>=0.48      # parse Outlook .msg emails
+pillow>=10             # PIL — QR image decode (pyzbar input) + JPEG frame streaming (usually transitive; pin it)
+# NB: extract-msg (Outlook .msg support) is NOT listed here. It HARD-pins beautifulsoup4<4.14, which
+# conflicts with SeleniumBase's ~=4.15, so `pip install -r requirements.txt` would fail (ResolutionImpossible).
+# Install.bat installs it AFTER the rest with --no-deps (its bs4 pin is over-conservative — it runs fine on
+# 4.15). .eml / .pdf / .html email parsing works without it; only Outlook .msg needs it.

@@ -45,6 +45,12 @@ python -m pip install --disable-pip-version-check --quiet -r backend\requirement
 echo   [OK] Python dependencies installed
 echo.
 
+REM --- Outlook .msg support (extract-msg hard-pins an OLD beautifulsoup4 that clashes with SeleniumBase's
+REM      ~=4.15, so install it WITHOUT its deps to keep the right bs4. Non-fatal: .eml/.pdf/.html work anyway) ---
+echo   [..] Installing Outlook .msg support ...
+python -m pip install --disable-pip-version-check --quiet --no-deps "extract-msg>=0.48" && python -m pip install --disable-pip-version-check --quiet compressed-rtf ebcdic olefile red-black-tree-mod RTFDE tzlocal && (echo   [OK] Outlook .msg support installed) || (echo   [!] Outlook .msg support skipped ^(non-fatal - .eml/.pdf/.html still parse^))
+echo.
+
 REM --- browsers ---
 echo   [..] Downloading the Playwright Firefox browser ...
 python -m playwright install firefox || echo   [!] Firefox download hiccup - retry later: python -m playwright install firefox
@@ -81,8 +87,20 @@ if defined CHROME (
   echo       re-run, or run with PHISH_ENGINE=camoufox to use the Firefox engine.
 )
 echo.
+
+REM --- optional .env (API keys / Gmail intake creds) — auto-loaded from the folder OR backend\ ---
+if exist ".env" (
+  echo   [OK] .env found in this folder - it will be loaded automatically.
+) else if exist "backend\.env" (
+  echo   [OK] backend\.env found - it will be loaded automatically.
+) else (
+  echo   [i] No .env yet ^(optional^). Copy  .env.example  to  .env  and fill in any keys you have
+  echo       ^(VirusTotal, Gmail intake, etc.^). PhishLab runs fine without it.
+)
+echo.
 echo   ==================================================================
-echo     Setup complete.  Start PhishLab with:   PhishLab.bat
+echo     Setup complete.  One-click launch:   start.bat
+echo     ^(starts Tor + the server + opens the console^)
 echo     Then open in a browser:   http://127.0.0.1:8090
 echo   ==================================================================
 echo.

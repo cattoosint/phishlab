@@ -348,7 +348,11 @@ class ReportSession:
     # in the window; PhishLab auto-captures when the results render (or on 'Capture results').
     def _navigate_and_prefill(self, sb) -> None:
         cfg = SERVICES[self.service]
-        page = cfg["upload_page"] if (self.file_bytes and cfg.get("supports_file")) else cfg["url_page"]
+        # For a FILE, VirusTotal takes the SHA256 straight to the file's report via the SAME search box the
+        # URL flow uses — no upload, no sample sent. Search by hash instead of the upload form.
+        vt_hash_search = bool(self.file_bytes and self.service == "virustotal" and self.file_hashes.get("sha256"))
+        page = cfg["url_page"] if vt_hash_search or not self.file_bytes else (
+            cfg["upload_page"] if cfg.get("supports_file") else cfg["url_page"])
         self.state = "loading"
         self._log(f"Opening {cfg['label']} — {page}")
         try:
@@ -359,25 +363,28 @@ class ReportSession:
             except Exception:
                 self._log("(page slow to load — continuing)")
         self._wait(sb, 3)
-        if self.file_bytes and cfg.get("supports_file"):
+        if vt_hash_search:
+            self._prefill_url(sb, value=self.file_hashes["sha256"], label="the file's SHA256")
+        elif self.file_bytes and cfg.get("supports_file"):
             self._prefill_file(sb)
         elif self.url:
             self._prefill_url(sb)
 
-    def _prefill_url(self, sb) -> None:
+    def _prefill_url(self, sb, value=None, label=None) -> None:
+        value = value or self.url
         ok = False
         try:
-            ok = bool(sb.execute_script(_DEEP_INPUTS_JS, self.url))   # type into the box (+ Enter); NO button-click
+            ok = bool(sb.execute_script(_DEEP_INPUTS_JS, value))     # type into the box (+ Enter); NO button-click
         except Exception:
             ok = False
         if ok:
             self.report["human_needed"] = "captcha"
-            self._log(f"Filled the link into the box: {self.url}")
-            self._log("→ Now SOLVE THE CAPTCHA and submit in the Chrome window. I'll screenshot when the "
-                      "result renders (or press 'Capture results').")
+            self._log(f"Filled {label or 'the link'} into the search box: {value}")
+            self._log("→ Now SOLVE THE CAPTCHA and press Enter/submit in the Chrome window. I'll screenshot "
+                      "when the result renders (or press 'Capture results').")
         else:
             self.report["human_needed"] = "submit"
-            self._log(f"Couldn't reach the box automatically — PASTE this into the window and submit: {self.url}")
+            self._log(f"Couldn't reach the box automatically — PASTE this into the window and submit: {value}")
 
     def _prefill_file(self, sb) -> None:
         """Stage the attachment to a temp file and hand it to the page's <input type=file> (piercing shadow
