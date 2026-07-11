@@ -336,6 +336,23 @@ class SBSession:
                 pass
 
     # ── Cloudflare "Suspected Phishing" solve (SeleniumBase real-mouse) ──
+    # challenge phrases that appear on the OUTER page (the Turnstile's own 'verify you are human' text is in
+    # a cross-origin iframe get_page_source can't read, but the wrapper card text is on the outer page)
+    _CF_PHRASES = ("suspected phishing", "reported for potential", "verification failed", "verify you are human",
+                   "checking your browser", "needs to review the security", "one more step before you proceed",
+                   "one more step", "before you proceed", "before you continue")
+
+    def _has_cf_widget(self, sb) -> bool:
+        """The Cloudflare Turnstile widget is in the DOM — detect the iframe/element directly since its
+        'verify you are human' text lives in a cross-origin iframe the page source can't see."""
+        try:
+            return bool(sb.execute_script(
+                "return !!(document.querySelector('iframe[src*=\"challenges.cloudflare.com\"]')"
+                "||document.querySelector('iframe[src*=\"turnstile\"]')"
+                "||document.querySelector('.cf-turnstile,#cf-turnstile,[data-sitekey]'));"))
+        except Exception:
+            return False
+
     def _still_gated(self, sb) -> bool:
         """True while a Cloudflare gate (warning or challenge) is still on-screen."""
         try:
@@ -343,21 +360,23 @@ class SBSession:
         except Exception:
             t = ""
         b = self._body(sb)
-        return ("suspected phishing" in b or "reported for potential" in b or "verification failed" in b
-                or "just a moment" in t or "attention required" in t or "verify you are human" in b
-                or "checking your browser" in b or "needs to review the security" in b)
+        if any(k in b for k in self._CF_PHRASES):
+            return True
+        return ("just a moment" in t or "attention required" in t or "one more step" in t
+                or "before you proceed" in t)
 
-    def _is_cf_gate(self, title, html) -> bool:
-        """A Cloudflare gate: the 'Suspected Phishing' WARNING or a 'Just a moment'/'Attention Required'
-        interactive CHALLENGE. (Matches visible challenge text/title, not just injected CF scripts.)"""
+    def _is_cf_gate(self, title, html, sb=None) -> bool:
+        """A Cloudflare gate: the 'Suspected Phishing' WARNING or an interactive CHALLENGE ('Just a moment',
+        'Attention Required', 'One more step before you proceed…' + a Turnstile widget)."""
         if X.is_cf_phish_warning(title, html):
             return True
         t = (title or "").lower()
         b = (html or "").lower()
-        if "just a moment" in t or "attention required" in t:
+        if "just a moment" in t or "attention required" in t or "one more step" in t or "before you proceed" in t:
             return True
-        return any(k in b for k in ("verify you are human", "checking your browser",
-                                    "needs to review the security of your connection"))
+        if any(k in b for k in self._CF_PHRASES):
+            return True
+        return bool(sb is not None and self._has_cf_widget(sb))    # DOM backstop when text is iframe-only
 
     def _solve_cf(self, sb) -> bool:
         """Clear a Cloudflare gate (warning OR challenge). Real-mouse Turnstile solve + retry."""
@@ -501,7 +520,7 @@ class SBSession:
                       + (f" — TELEGRAM exfil bot {st['telegram'][0]['bot_id']}" if st["telegram"] else ""))
 
             # Cloudflare gate (Suspected-Phishing WARNING or Just-a-moment/Attention-Required CHALLENGE)
-            if self._is_cf_gate(st.get("title"), html):
+            if self._is_cf_gate(st.get("title"), html, sb):
                 if st.get("url") in cf_tried:
                     self._log("  still Cloudflare-gated after a solve attempt — stopping.")
                     break
