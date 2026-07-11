@@ -150,24 +150,22 @@ def _poll_once() -> list[dict]:
             subj, frm = _decode(hdr.get("Subject")), _decode(hdr.get("From"))
             if not _sender_allowed(frm):                       # only trusted SOC sender (SOC@example.com)
                 continue                                       # ignore UptimeRobot / alerts / newsletters
+            # WORKFLOW: "just attach and send" — analyse the ATTACHED file(s) only. Links in the email body
+            # or subject prose are IGNORED entirely (a real message with words is not a submission), so a
+            # corporate footer / disclaimer / signature never gets auto-detonated. Two accepted signals:
+            #   mode 1: the whole subject is a bare URL; mode 2: links pulled from an attached PDF/HTML/.eml.
             found: list[tuple[str, str]] = []
-            body_links: list[tuple[str, str]] = []
-            surl = subject_url(subj)                          # mode 1: a link-only subject
+            surl = subject_url(subj)                            # mode 1: subject IS a single URL (no prose)
             if surl:
                 found.append((surl, "subject"))
-            if len(full) <= 30_000_000:                        # parse attachments (PDF text/QR, HTML, nested email)
+            if len(full) <= 30_000_000:                        # mode 2: PDF text/QR, HTML, nested-email links
                 try:
                     from . import mailparse as MP
                     for lk in MP.parse(full, "intake.eml").get("links", []):
-                        src = lk.get("source", "attachment")
-                        if src == "body":                      # the analyst's forwarding note, usually — hold as fallback
-                            body_links.append((lk["url"], src))
-                        else:                                  # mode 2: link from a PDF/HTML/nested attached phish
-                            found.append((lk["url"], src))
+                        if lk.get("source") != "body":         # attachment/nested only — never body/subject prose
+                            found.append((lk["url"], lk.get("source", "attachment")))
                 except Exception:
                     pass
-            if not found:                                      # nothing attached & no subject URL → treat an inline-
-                found = body_links                             # forwarded phish's body links as the candidates
             seen = set()
             for url, source in found:                          # one intake item per distinct link
                 if url in seen:

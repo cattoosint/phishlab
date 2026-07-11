@@ -93,7 +93,7 @@ if(b){b.click();return true;} var f=document.forms[0]; if(f){f.submit();return t
 # underneath, without re-clicking the same control. Returns the (lowercased) text it clicked, or null.
 _ADVANCE_JS = r"""
 var done=arguments[0]||[];
-var skip=/privacy|terms|cookie|unsubscribe|about us|contact|help ?center|imprint|legal|copyright|report abuse|do not sell|manage consent|\bpolicy\b|accessibility|sitemap|careers|feedback|support/i;
+var skip=/privacy|terms|cookie|unsubscribe|about us|contact|help ?center|imprint|legal|copyright|report abuse|do not sell|manage consent|\bpolicy\b|accessibility|sitemap|careers|feedback|support|troubleshoot|can.?t access|cant access|\bforgot\b|trouble|learn more|create one|sign.?in options|privacy statement|use another/i;
 var primary=/see details|view (document|file|invoice|message|now)|read message|open (document|file|in)|\baccess\b|log ?in|sign ?in|get started|continue to|release|verify now|confirm|update your|proceed to|click here|go to document|authenticate|unlock|review/i;
 var gate=/close|dismiss|got it|\bok\b|i understand|acknowledge|agree|\baccept\b|continue|proceed|next|enter|yes[, ]|start|begin/i;
 var inter=/visit|at your own risk|ignore ?& ?proceed|ignore and proceed|go to site|enter site/i;
@@ -385,6 +385,32 @@ class SBSession:
             return True
         return bool(sb is not None and self._has_cf_widget(sb))    # DOM backstop: a VISIBLE Turnstile only
 
+    def _cf_gate_reason(self, title, html, sb) -> str:
+        """Diagnostic: exactly WHY _is_cf_gate fired (which check matched) + a rendered-text snippet."""
+        hits = []
+        try:
+            if X.is_cf_phish_warning(title, html):
+                hits.append("phish-warning(html)")
+        except Exception:
+            pass
+        t = (title or "").lower()
+        for k in ("just a moment", "attention required", "one more step", "before you proceed"):
+            if k in t:
+                hits.append("title:" + k)
+        try:
+            b = self._body(sb) if sb is not None else ""
+        except Exception:
+            b = ""
+        for k in self._CF_PHRASES:
+            if k in b:
+                hits.append("text:" + k)
+        try:
+            if self._has_cf_widget(sb):
+                hits.append("visible-widget")
+        except Exception:
+            pass
+        return (", ".join(hits) or "none?") + f" | title={title!r} | rendered={b[:160]!r}"
+
     def _solve_cf(self, sb) -> bool:
         """Clear a Cloudflare gate (warning OR challenge). Real-mouse Turnstile solve + retry."""
         for attempt in range(3):
@@ -528,6 +554,8 @@ class SBSession:
 
             # Cloudflare gate (Suspected-Phishing WARNING or Just-a-moment/Attention-Required CHALLENGE)
             if self._is_cf_gate(st.get("title"), html, sb):
+                if os.getenv("PHISH_CF_DIAG"):        # opt-in: why the gate fired (set PHISH_CF_DIAG=1 to debug)
+                    self._log("  [diag] cf-gate reason: " + self._cf_gate_reason(st.get("title"), html, sb))
                 if st.get("url") in cf_tried:
                     self._log("  still Cloudflare-gated after a solve attempt — stopping.")
                     break

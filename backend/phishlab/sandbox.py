@@ -368,9 +368,13 @@ def _verdict(r: dict) -> dict:
     listed = (((en.get("urlhaus") or {}).get("listed"))
               or (((en.get("spamhaus") or {}).get("dbl") or {}).get("listed"))
               or ((en.get("safebrowsing") or {}).get("listed")))
+    # a HIGH source-code indicator (credential form posts off-site, packed atob kit, etc.) is a strong
+    # phishing signature on its own — an MS/bank clone with title just "Sign in" (no brand word) + a harvested
+    # login was scoring 18 because none of the other hard signals fired. Don't let the age down-weight bury it.
+    strong_source = ((r.get("indicators") or {}).get("counts") or {}).get("high", 0) >= 1
     hard = bool(r["exfil"]["telegram"] or any(s.get("off_site") for s in r["steps"])
                 or (r.get("kit") or {}).get("found") or (en.get("aitm") or {}).get("toolkit")
-                or listed or dc.startswith("cloaked") or brand_login)
+                or listed or dc.startswith("cloaked") or brand_login or strong_source)
     # the age down-weight is fooled by shared-hosting / free subdomains (the OLD parent domain is 'established'
     # but the phishing subdomain is attacker-controlled & free) — don't trust registrable-domain age there.
     shared = _is_shared_hosting(host)
