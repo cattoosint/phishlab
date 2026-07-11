@@ -51,12 +51,21 @@ def _is_asset(url: str) -> bool:
     return bool(_ASSET_RE.search(url or ""))
 
 
+# template-placeholder artifacts surfaced by de-obfuscation of a kit's SOURCE (before its server fills them
+# in): https://${domain}/… , …/bot${TELEGRAM_BOT_TOKEN}/… , {{url}}, <%= x %>, `${x}` — not real URLs.
+_TEMPLATE_RE = re.compile(r"\$\{|\$\(|\{\{|<%|<\?|`")
+
+
+def _is_templated(url: str) -> bool:
+    return bool(_TEMPLATE_RE.search(url or ""))
+
+
 def _find_urls(text: str) -> set[str]:
     """Raw URL scan of already-decoded text — caller handles HTML-entity/defang decoding."""
     out: set[str] = set()
     for m in _URL_RE.findall(text or ""):
         c = _clean(m)
-        if c and not _is_asset(c):
+        if c and not _is_asset(c) and not _is_templated(c):
             out.add(c)
     return out
 
@@ -182,7 +191,7 @@ def _urls_from_html(markup: str) -> set[str]:
     out |= _find_urls(_refang(_deobfuscate(markup)))       # de-obfuscated packed JS / escaped strings
     for m in _HREF_RE.findall(markup):
         c = _clean(m)
-        if c and not _is_asset(c):
+        if c and not _is_asset(c) and not _is_templated(c):
             out.add(c)
     return out
 
