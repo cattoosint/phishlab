@@ -42,6 +42,11 @@ except Exception:                       # Pillow ships with seleniumbase; fall b
     Image = None
 
 MAX_STEPS = int(os.getenv("PHISH_SB_MAX_STEPS") or "8")
+# Cap live-browser detonations running AT ONCE so a burst (e.g. the intake auto-detonating every link in a
+# forwarded phish) can't spawn a dozen Chrome instances and exhaust RAM on a modest SOC box. Extra
+# detonations QUEUE until a slot frees. Tune with PHISH_MAX_CONCURRENT (default 3).
+_MAX_CONCURRENT = max(1, int(os.getenv("PHISH_MAX_CONCURRENT") or "3"))
+_DETONATE_SEM = threading.BoundedSemaphore(_MAX_CONCURRENT)
 # FAKE decoy identity — plausible-looking (a real-format Gmail, not an obvious @example.com that some kits
 # reject) so validation passes, but NOT a real account. Overridable via env for a site's own decoy identity.
 _FAKE = {"user": os.getenv("PHISH_FAKE_USER", "abelrtsmith"),
@@ -750,6 +755,12 @@ class SBSession:
     # ── main entry (sync, runs in a worker thread) ──
     def run(self):
         t0 = self.report["started_at"]
+        # only _MAX_CONCURRENT detonations hold a live browser at once — the rest queue here (protects RAM
+        # from an intake burst). A slot is held for this whole detonation and released in the finally.
+        if not _DETONATE_SEM.acquire(blocking=False):
+            self.state = "queued"
+            self._log(f"Queued — up to {_MAX_CONCURRENT} detonations run at once; waiting for a free slot…")
+            _DETONATE_SEM.acquire()
         try:
             self.state = "running"
             self._log(f"Detonating {self.url}  (engine: SeleniumBase / Chrome UC)")
@@ -808,6 +819,10 @@ class SBSession:
             self.report["error"] = f"{type(exc).__name__}: {exc}"[:200]
             self.state = "error"
         finally:
+            try:
+                _DETONATE_SEM.release()           # free the slot for a queued detonation
+            except Exception:
+                pass
             self._sb = None
             self.report.setdefault("verdict", {"label": "incomplete", "score": 0, "reasons": ["scan did not finish"]})
             try:
