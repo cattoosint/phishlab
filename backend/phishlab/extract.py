@@ -133,3 +133,50 @@ def iocs(html: str, page_url: str, extra_urls=()) -> dict:
     ips.update(IPV4.findall(html or ""))
     emails.update(e.lower() for e in EMAIL.findall(html or ""))
     return {"domains": sorted(hosts), "ips": sorted(ips), "emails": sorted(emails)}
+
+
+# ── broad "scam signals" IOCs — the actionable bits a phish/fake-site carries even with NO clickable link
+# (a callback number, a crypto wallet to pay, a Telegram/WhatsApp handle to contact, a reply-to that doesn't
+# match the sender). These are SOFT LEADS shown with a confidence band — NOT the hard detonation verdict.
+_PHONE_RE = re.compile(r"\+\d[\d\s().-]{6,16}\d|\b\d{3}[-.\s]\d{3}[-.\s]\d{4}\b")
+_BTC_RE = re.compile(r"\b(?:bc1[ac-hj-np-z02-9]{11,71}|[13][a-km-zA-HJ-NP-Z1-9]{25,34})\b")
+_ETH_RE = re.compile(r"\b0x[a-fA-F0-9]{40}\b")
+_XMR_RE = re.compile(r"\b4[0-9AB][1-9A-HJ-NP-Za-km-z]{93}\b")
+_IBAN_RE = re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b")
+_TME_RE = re.compile(r"(?:t|telegram)\.me/([A-Za-z0-9_+]{4,40})", re.I)
+_WA_RE = re.compile(r"(?:wa\.me/|api\.whatsapp\.com/send\?phone=|chat\.whatsapp\.com/)([A-Za-z0-9_+-]{4,40})", re.I)
+
+
+def _addr_domain(a: str) -> str:
+    m = re.search(r"@([a-z0-9.-]+)", (a or "").lower())
+    return m.group(1) if m else ""
+
+
+def scam_signals(text: str, from_addr: str | None = None, reply_to: str | None = None) -> dict:
+    """SOFT scam leads from the raw text/source of an email or fake site: callback phone numbers, crypto
+    wallet addresses, IBAN/bank, Telegram/WhatsApp handles, and a from↔reply-to domain mismatch. Returns
+    {iocs:{...only non-empty...}, confidence: low|medium|high}. Meant to surface something actionable when
+    there is no malicious URL — displayed as leads, kept DISTINCT from the detonation verdict."""
+    t = text or ""
+    phones = []
+    for p in _PHONE_RE.findall(t):
+        norm = re.sub(r"[^\d+]", "", p)
+        if 7 <= len(norm.lstrip("+")) <= 15 and norm not in phones:
+            phones.append(norm)
+    out: dict = {
+        "phones": phones[:20],
+        "crypto_wallets": sorted(set(_BTC_RE.findall(t)) | set(_ETH_RE.findall(t)) | set(_XMR_RE.findall(t)))[:20],
+        "ibans": sorted(set(_IBAN_RE.findall(t)))[:20],
+        "telegram_handles": sorted({m.rstrip("/") for m in _TME_RE.findall(t)})[:20],
+        "whatsapp": sorted(set(_WA_RE.findall(t)))[:20],
+    }
+    fd, rd = _addr_domain(from_addr), _addr_domain(reply_to)
+    mismatch = {"from": fd, "reply_to": rd} if (fd and rd and fd != rd) else None
+    iocs_nonempty = {k: v for k, v in out.items() if v}
+    if mismatch:
+        iocs_nonempty["replyto_mismatch"] = mismatch
+    # confidence: a wallet / messaging handle / reply-to mismatch is a strong scam tell on its own
+    strong = bool(out["crypto_wallets"] or out["telegram_handles"] or out["whatsapp"] or mismatch)
+    n = len(iocs_nonempty)
+    conf = "high" if (strong and n >= 2) else "medium" if (strong or n >= 2) else "low" if n else None
+    return {"iocs": iocs_nonempty, "confidence": conf}

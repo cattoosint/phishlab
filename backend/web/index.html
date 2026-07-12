@@ -401,6 +401,8 @@
       <div class="body" id="evidence"></div>
     </div>
 
+    <div id="scamcard"></div>
+
     <div class="card c-teal" id="redirectcard" style="display:none">
       <h2>Detonation graph <span id="rdcount"></span></h2>
       <div class="body" style="padding:8px 10px 10px">
@@ -478,6 +480,20 @@ async function analyzeEmail(){
 }
 const _AUTH_BAD=/fail|softfail|none|neutral|temperror|permerror/i;
 const _SRC_COL={'body':'var(--accent)','pdf-text':'var(--warn)','pdf-qr':'#d072b0','image-qr':'#d072b0','html':'#9b8cf0'};
+// Broad "scam signals" — soft, actionable IOCs (callback phone, crypto wallet, Telegram/WhatsApp handle,
+// reply-to mismatch), shown with a confidence band and kept DISTINCT from the hard detonation verdict.
+const _SCAM_LABEL={phones:'☎ callback phone',crypto_wallets:'₿ crypto wallet',ibans:'🏦 IBAN / bank',telegram_handles:'✈ Telegram handle',whatsapp:'💬 WhatsApp',replyto_mismatch:'↩ reply-to ≠ sender'};
+const _CONF_COL={high:'var(--bad)',medium:'var(--warn)',low:'var(--muted)'};
+function scamSignalsHtml(sig){
+  sig=sig||{}; const iocs=sig.iocs||{}, keys=Object.keys(iocs); if(!keys.length) return '';
+  const conf=sig.confidence||'low';
+  const rows=keys.map(k=>{ let v=iocs[k];
+    if(k==='replyto_mismatch') v=['from '+v.from+' · reply-to '+v.reply_to];
+    return `<div class="kv"><span class="k">${_SCAM_LABEL[k]||esc(k)}</span><span class="v" style="text-align:right;word-break:break-all">${(v||[]).map(x=>esc(String(x))).join('<br>')}</span></div>`;
+  }).join('');
+  return `<div class="card c-amber" style="margin-top:14px"><h2>Scam signals <span style="color:${_CONF_COL[conf]||'var(--muted)'}">${esc(conf)} confidence · leads, not a verdict</span></h2><div class="body">`+
+    `<div class="empty-note" style="margin:0 0 8px">Actionable IOCs in the content — <b>soft leads</b>, separate from the detonation verdict.</div>${rows}</div></div>`;
+}
 function renderEmail(d){
   const p=$('#emailpanel'); if(!p) return;
   const h=d.headers||{}, auth=h.auth||{}, links=d.links||[], atts=d.attachments||[], aid=d.id||'';
@@ -493,7 +509,7 @@ function renderEmail(d){
     `<div class="kv"><span class="k">links found</span><span class="v">${links.length}</span></div>`+
     (links.length?`<ul class="list">${links.map(lk=>`<li style="word-break:break-all"><span class="chip" style="color:${_SRC_COL[lk.source]||'var(--muted)'};border-color:${_SRC_COL[lk.source]||'var(--line)'}">${esc(lk.source)}</span> ${esc(lk.url)}<div style="margin-top:5px;display:flex;gap:6px;flex-wrap:wrap"><button class="cbtn rep" onclick="detonateLink('${jsq(lk.url)}')">Detonate ▶</button><button class="cbtn" onclick="copyText(this,'${jsq(lk.url)}')">Copy</button><button class="cbtn" onclick="startReportLink('virustotal','${jsq(lk.url)}')" title="Screenshot the VirusTotal verdict">VT</button><button class="cbtn" onclick="startReportLink('fortiguard','${jsq(lk.url)}')" title="Rate/submit on FortiGuard">FortiGuard</button></div></li>`).join('')}</ul>`:'<div class="empty-note">No links found in this email/file.</div>')+
     (atts.length?`<div class="kv" style="margin-top:8px"><span class="k">attachments</span><span class="v">${atts.length}</span></div><ul class="list">${atts.map((a,ix)=>`<li>${esc(a.name)} <span style="color:var(--faint)">[${esc(a.kind)}] ${Math.round((a.size||0)/1024)}KB · ${a.link_count} link(s)</span><br><span style="color:var(--faint);font-size:10.5px">sha256 ${esc(a.sha256||'')}${a.md5?'<br>md5&nbsp;&nbsp;&nbsp;'+esc(a.md5):''}${a.sha1?'<br>sha1&nbsp;&nbsp;'+esc(a.sha1):''}</span>${(a.kind==='pdf'||a.kind==='html')?`<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap"><button class="cbtn rep" onclick="startReportFile('hybrid','${jsq(aid)}',${ix})" title="Upload this file to Hybrid Analysis">→ Hybrid Analysis</button><button class="cbtn" onclick="startReportFile('virustotal','${jsq(aid)}',${ix})" title="Upload this file to VirusTotal">→ VirusTotal</button></div>`:''}</li>`).join('')}</ul>`:'')+
-  `</div></div>`;
+  `</div></div>`+scamSignalsHtml(d.scam_signals);
 }
 function detonateLink(url){ $('#url').value=url; try{ $('#url').scrollIntoView({behavior:'smooth',block:'center'}); }catch(e){} detonate(); }
 function clearEmail(){ const p=$('#emailpanel'); if(p){ p.style.display='none'; p.innerHTML=''; } try{ $('#emailfile').value=''; }catch(e){} $('#emailclear').style.display='none'; clearStatus(); }
@@ -863,6 +879,9 @@ function render(rep){
 
   // evidence gallery — login page (pre-creds) + VT/HA/FortiGuard proof screenshots
   try{ renderEvidence(rep); }catch(e){ const ec=$('#evidencecard'); if(ec) ec.style.display='none'; }
+
+  // scam signals — soft IOC leads (callback phone / wallet / handle) from the fake-site source
+  try{ const sc=$('#scamcard'); if(sc) sc.innerHTML=scamSignalsHtml(rep.scam_signals); }catch(e){}
 
   // timeline
   const tl=$('#timeline'); tl.innerHTML='';

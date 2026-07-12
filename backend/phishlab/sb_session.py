@@ -742,6 +742,10 @@ class SBSession:
             self.report["indicators"] = I.analyze_source(joined, self.url)
         except Exception:
             pass
+        try:  # broad scam leads on the fake-site source (callback phone, wallet, telegram/whatsapp handle)
+            self.report["scam_signals"] = X.scam_signals(joined)
+        except Exception:
+            pass
 
     # ── main entry (sync, runs in a worker thread) ──
     def run(self):

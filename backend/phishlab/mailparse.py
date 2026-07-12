@@ -22,6 +22,8 @@ import re
 from email import policy
 from email.parser import BytesParser
 
+from . import extract as X          # broad scam-signal IOC extraction (phones/wallets/handles/reply-to)
+
 logger = logging.getLogger("phishlab.mailparse")
 
 _OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"        # .msg (and other OLE compound) file signature
@@ -273,6 +275,7 @@ def _analyze_attachment(name: str, ctype: str, payload: bytes, _depth: int = 0) 
     sha1 = hashlib.sha1(blob).hexdigest()
     links: list[dict] = []
     telegram: list[dict] = []
+    scan_text = ""                                   # decoded text handed up for broad scam-signal scanning
     if kind == "pdf":
         text_urls, qr_urls = _pdf_links(payload)
         for u in sorted(text_urls):
@@ -284,6 +287,7 @@ def _analyze_attachment(name: str, ctype: str, payload: bytes, _depth: int = 0) 
         for u in sorted(_urls_from_html(markup)):
             links.append({"url": u, "source": "html", "attachment": name})
         telegram = _telegram_exfil(markup)          # a packed-JS harvester often exfils to Telegram, not a URL
+        scan_text = markup + "\n" + _deobfuscate(markup)
     elif kind == "image":                            # QR hidden in an inline/attached image ("quishing")
         for u in sorted(_image_qr(payload)):
             links.append({"url": u, "source": "image-qr", "attachment": name})
@@ -298,7 +302,7 @@ def _analyze_attachment(name: str, ctype: str, payload: bytes, _depth: int = 0) 
             pass
     meta = {"name": name or "(unnamed)", "ctype": ctype or "", "size": len(blob),
             "sha256": sha256, "md5": md5, "sha1": sha1, "kind": kind, "link_count": len(links)}
-    return {"meta": meta, "links": links, "kind": kind, "telegram": telegram}
+    return {"meta": meta, "links": links, "kind": kind, "telegram": telegram, "text": scan_text}
 
 
 def _iter_parts(part):
@@ -338,6 +342,7 @@ def _parse_eml(data: bytes, _depth: int = 0) -> dict:
     links: list[dict] = []
     attachments: list[dict] = []
     telegram: list[dict] = []
+    scan_parts: list[str] = []
     body_preview = ""
     for part in _iter_parts(msg):
         ctype = part.get_content_type()
@@ -372,6 +377,8 @@ def _parse_eml(data: bytes, _depth: int = 0) -> dict:
             attachments.append(a["meta"])
             links.extend(a["links"])
             telegram.extend(a.get("telegram", []))
+            if a.get("text"):
+                scan_parts.append(a["text"])
         elif ctype == "text/plain":
             try:
                 t = part.get_content()
@@ -380,6 +387,7 @@ def _parse_eml(data: bytes, _depth: int = 0) -> dict:
             body_preview = body_preview or t[:600]
             links.extend({"url": u, "source": "body", "attachment": None} for u in _urls_from_text(t))
             telegram.extend(_telegram_exfil(t))
+            scan_parts.append(t + "\n" + _deobfuscate(t))
         elif ctype == "text/html":
             try:
                 h = part.get_content()
@@ -387,7 +395,9 @@ def _parse_eml(data: bytes, _depth: int = 0) -> dict:
                 h = ""
             links.extend({"url": u, "source": "body", "attachment": None} for u in _urls_from_html(h))
             telegram.extend(_telegram_exfil(h))
-    return _finish("email", headers, links, attachments, body_preview, telegram)
+            scan_parts.append(h + "\n" + _deobfuscate(h))
+    scam = X.scam_signals("\n".join(scan_parts), headers.get("from"), headers.get("reply_to"))
+    return _finish("email", headers, links, attachments, body_preview, telegram, scam)
 
 
 def _parse_msg(data: bytes, _depth: int = 0) -> dict:
@@ -395,7 +405,7 @@ def _parse_msg(data: bytes, _depth: int = 0) -> dict:
         import extract_msg
     except Exception:
         return {"kind": "email", "error": "extract-msg not installed (Outlook .msg support)",
-                "headers": {}, "links": [], "attachments": [], "telegram_exfil": []}
+                "headers": {}, "links": [], "attachments": [], "telegram_exfil": [], "scam_signals": {"iocs": {}, "confidence": None}}
     m = extract_msg.openMsg(io.BytesIO(data))
     headers = {"from": str(getattr(m, "sender", "") or ""), "to": str(getattr(m, "to", "") or ""),
                "subject": str(getattr(m, "subject", "") or ""), "date": str(getattr(m, "date", "") or ""),
@@ -403,6 +413,7 @@ def _parse_msg(data: bytes, _depth: int = 0) -> dict:
                "auth": _auth_results(str(getattr(m, "header", "") or ""))}
     links: list[dict] = []
     telegram: list[dict] = []
+    scan_parts: list[str] = []
     body_preview = ""
     for txt, is_html in ((getattr(m, "body", "") or "", False), (getattr(m, "htmlBody", "") or "", True)):
         if isinstance(txt, bytes):
@@ -412,6 +423,7 @@ def _parse_msg(data: bytes, _depth: int = 0) -> dict:
         found = _urls_from_html(txt) if is_html else _urls_from_text(txt)
         links.extend({"url": u, "source": "body", "attachment": None} for u in found)
         telegram.extend(_telegram_exfil(txt))
+        scan_parts.append(txt + "\n" + _deobfuscate(txt))
     attachments: list[dict] = []
     for att in (getattr(m, "attachments", []) or []):
         try:
@@ -423,22 +435,26 @@ def _parse_msg(data: bytes, _depth: int = 0) -> dict:
         attachments.append(a["meta"])
         links.extend(a["links"])
         telegram.extend(a.get("telegram", []))
+        if a.get("text"):
+            scan_parts.append(a["text"])
     try:
         m.close()
     except Exception:
         pass
-    return _finish("email", headers, links, attachments, body_preview, telegram)
+    scam = X.scam_signals("\n".join(scan_parts), headers.get("from"), headers.get("reply_to"))
+    return _finish("email", headers, links, attachments, body_preview, telegram, scam)
 
 
 def _parse_loose(data: bytes, name: str, _depth: int = 0) -> dict:
     """A loose attachment uploaded on its own (a .pdf / .html / etc., not wrapped in an email)."""
     a = _analyze_attachment(name or "file", "", data, _depth)
+    scam = X.scam_signals(a.get("text", ""))
     return _finish("file", {"from": "", "subject": name, "auth": {}}, a["links"], [a["meta"]], "",
-                   a.get("telegram", []))
+                   a.get("telegram", []), scam)
 
 
 def _finish(kind: str, headers: dict, links: list[dict], attachments: list[dict], body_preview: str,
-            telegram: list[dict] | None = None) -> dict:
+            telegram: list[dict] | None = None, scam: dict | None = None) -> dict:
     seen, uniq = set(), []
     for lk in links:
         u = lk.get("url")
@@ -452,7 +468,8 @@ def _finish(kind: str, headers: dict, links: list[dict], attachments: list[dict]
             tg_seen.add(bid)
             tg.append(t)
     return {"kind": kind, "headers": headers, "links": uniq, "attachments": attachments,
-            "body_preview": body_preview, "link_count": len(uniq), "telegram_exfil": tg}
+            "body_preview": body_preview, "link_count": len(uniq), "telegram_exfil": tg,
+            "scam_signals": scam or {"iocs": {}, "confidence": None}}
 
 
 def _collect_eml_payloads(data: bytes, out: list) -> None:
@@ -528,4 +545,4 @@ def parse(data: bytes, filename: str = "", _depth: int = 0) -> dict:
     except Exception as exc:
         logger.warning("mailparse failed: %s", exc)
         return {"kind": "file", "error": f"{type(exc).__name__}: {exc}"[:160],
-                "headers": {}, "links": [], "attachments": [], "telegram_exfil": []}
+                "headers": {}, "links": [], "attachments": [], "telegram_exfil": [], "scam_signals": {"iocs": {}, "confidence": None}}
