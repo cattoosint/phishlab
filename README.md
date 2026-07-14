@@ -18,6 +18,14 @@ chain, recovers the phishing kit where exposed, and helps you report it for take
   <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue">
 </p>
 
+<p align="center">
+  <img src="docs/images/verdict.png" width="900"
+       alt="PhishLab driving a Microsoft-branded phishing kit and scoring it CONFIRMED PHISHING (96)">
+  <br>
+  <em>A demo phishing kit driven end-to-end — fake creds submitted, followed to the verify page, then
+  scored <strong>confirmed_phishing (96)</strong> with every reason shown.</em>
+</p>
+
 > **Defensive use only**, on an **isolated machine**, with **fake data only**. It deliberately visits
 > hostile URLs — never point it at anything you aren't authorised to analyse, and never on a box with
 > access to production systems.
@@ -84,6 +92,17 @@ reporting) without a cloud dependency. Samples never leave the machine.
 - **Takedown tracker + PhishTank watch** — pings reported sites on a schedule (UP/DOWN) from multiple
   vantages, and polls PhishTank until the URL is indexed, then surfaces the `phish_detail` link.
 
+<table>
+<tr>
+<td width="50%"><img src="docs/images/graph.png" alt="Force-directed detonation graph: specimen, landing, creds-go-here and off-host IOC nodes"></td>
+<td width="50%"><img src="docs/images/enrichment.png" alt="Enrichment, decloak and code-analysis evidence cards"></td>
+</tr>
+<tr>
+<td align="center"><em>Detonation graph — specimen → landing → where the creds go.</em></td>
+<td align="center"><em>Enrichment, decloak (scanner vs. victim) & code-analysis cards.</em></td>
+</tr>
+</table>
+
 ### The verdict
 A transparent **weighted verdict** — `inconclusive` → `suspicious` → `likely_phishing` → `confirmed_phishing`
 — every reason shown. Hard behavioural signals (Telegram exfil, off-site POST, recovered kit, cloaking,
@@ -102,6 +121,13 @@ email ─▶ │  parse .eml/.msg/PDF/HTML/QR ──▶ de-obfuscate ──▶ e
          │  evidence gallery · scam signals · scanner reporting · takedown tracker                 │
          └──────────────────────────────────────────────────────────────────────────────────────┘
 ```
+
+<p align="center">
+  <img src="docs/images/walkthrough.gif" width="820"
+       alt="Full PhishLab run: detonate, live streamed view, verdict, evidence cards, and the detonation graph">
+  <br>
+  <em>One run, start to finish: detonate → live streamed view → verdict → enrichment → detonation graph.</em>
+</p>
 
 - **Detonation engine.** The default is **Chrome via SeleniumBase UC (undetected-chromedriver) + CDP**,
   because it's the only approach that reliably solves Cloudflare's hardened managed **Turnstile** — the
