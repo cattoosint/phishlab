@@ -1311,7 +1311,7 @@ async function startReport(key,name){
 }
 
 // Report a Telegram exfil BOT or CHAT to Telegram abuse (telegram.org/support), pre-filled with the
-// SOC Team identity + the evidence found on the phishing site. Bot and chat are reported separately.
+// configured SOC identity + the evidence found on the phishing site. Bot and chat are reported separately.
 async function reportTelegram(kind, botId, botToken, chatIds){
   const site=window._curUrl||'the analysed phishing site';
   let detail;

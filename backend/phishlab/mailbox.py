@@ -57,10 +57,11 @@ def _cfg() -> tuple[str, str]:
 
 
 # Only ACT on intake mail from a trusted SOC sender — the box also receives UptimeRobot / Google Alerts /
-# LinkedIn / newsletters, which must never be auto-detonated. Default: SOC ALERTS (SOC@example.com).
-# Override/extend via MAIL_INTAKE_SENDERS (comma-separated); a bare "@domain" entry trusts a whole domain.
+# LinkedIn / newsletters, which must never be auto-detonated. Set your own trusted sender(s) via
+# MAIL_INTAKE_SENDERS (comma-separated); a bare "@domain" entry trusts a whole domain. The placeholder
+# default trusts nobody real, so the operator must opt in by configuring it (empty = accept all).
 _INTAKE_SENDERS = {s.strip().lower() for s in
-                   (os.getenv("MAIL_INTAKE_SENDERS") or "SOC@example.com").split(",") if s.strip()}
+                   (os.getenv("MAIL_INTAKE_SENDERS") or "soc-alerts@example.com").split(",") if s.strip()}
 
 
 def _sender_allowed(frm: str) -> bool:
@@ -148,7 +149,7 @@ def _poll_once() -> list[dict]:
             full = md[0][1]
             hdr = email.message_from_bytes(full)
             subj, frm = _decode(hdr.get("Subject")), _decode(hdr.get("From"))
-            if not _sender_allowed(frm):                       # only trusted SOC sender (SOC@example.com)
+            if not _sender_allowed(frm):                       # only the configured trusted SOC sender(s)
                 continue                                       # ignore UptimeRobot / alerts / newsletters
             # WORKFLOW: "just attach and send" — analyse the ATTACHED file(s) only. Links in the email body
             # or subject prose are IGNORED entirely (a real message with words is not a submission), so a

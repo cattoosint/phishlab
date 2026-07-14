@@ -465,7 +465,7 @@ async def tracker_remove(url: str):
 
 
 # ── PhishTank reporting poller ────────────────────────────────────────────────
-# Report a suspect URL to PhishTank (under the team account, default ""), then WATCH here:
+# Report a suspect URL to PhishTank (under your reporter handle, PHISH_PHISHTANK_USER), then WATCH here:
 # PhishLab polls the reporter's PhishTank user page every ~60s (up to 2h) until the URL is ingested, then
 # surfaces its phish_detail.php link to copy into WhatsApp for the takedown thread.
 class PTWatchReq(BaseModel):

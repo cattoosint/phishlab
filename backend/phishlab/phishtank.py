@@ -1,7 +1,7 @@
 """phishlab/phishtank.py — PhishTank reporting poller (SOC "easier reporting" flow).
 
-Workflow: an analyst reports a suspect URL to PhishTank (under the team account, default username
-""). PhishTank takes a while to ingest + assign a public phish_detail.php page. This polls
+Workflow: an analyst reports a suspect URL to PhishTank under the team's reporter handle (set via
+PHISH_PHISHTANK_USER). PhishTank takes a while to ingest + assign a public phish_detail.php page. This polls
 the reporter's PhishTank user page every ~60s (up to 2h) until the reported URL shows up, then surfaces
 its phish_detail.php link so the analyst can one-click copy it into WhatsApp for the takedown thread.
 
@@ -22,7 +22,7 @@ import httpx
 logger = logging.getLogger("phishlab.phishtank")
 
 BASE = os.getenv("PHISH_PHISHTANK_BASE", "https://phishtank.net")
-USER_DEFAULT = os.getenv("PHISH_PHISHTANK_USER", "")
+USER_DEFAULT = os.getenv("PHISH_PHISHTANK_USER", "")   # set to your PhishTank reporter handle
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0"
 
 WATCHES: dict[str, "Watch"] = {}
