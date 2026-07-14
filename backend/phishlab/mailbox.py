@@ -61,7 +61,7 @@ def _cfg() -> tuple[str, str]:
 # MAIL_INTAKE_SENDERS (comma-separated); a bare "@domain" entry trusts a whole domain. The placeholder
 # default trusts nobody real, so the operator must opt in by configuring it (empty = accept all).
 _INTAKE_SENDERS = {s.strip().lower() for s in
-                   (os.getenv("MAIL_INTAKE_SENDERS") or "soc-alerts@example.com").split(",") if s.strip()}
+                   (os.getenv("MAIL_INTAKE_SENDERS") or "SOC@example.com").split(",") if s.strip()}
 
 
 def _sender_allowed(frm: str) -> bool:

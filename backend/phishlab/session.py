@@ -694,7 +694,7 @@ REPORT_FORMS = {
 
 # analyst identity used to pre-fill abuse-report forms (Telegram etc.) — env-overridable
 REPORTER = {"name": os.getenv("PHISH_REPORTER_NAME", "SOC Team"),
-            "email": os.getenv("PHISH_REPORTER_EMAIL", "soc-alerts@example.com"),
+            "email": os.getenv("PHISH_REPORTER_EMAIL", "SOC@example.com"),
             "phone": os.getenv("PHISH_REPORTER_PHONE", "")}
 
 _PREFILL_JS = """(cfg) => {

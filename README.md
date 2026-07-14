@@ -15,6 +15,7 @@ chain, recovers the phishing kit where exposed, and helps you report it for take
   <img alt="Windows" src="https://img.shields.io/badge/platform-Windows-0078D6?logo=windows&logoColor=white">
   <img alt="Defensive security" src="https://img.shields.io/badge/scope-defensive%20security-2ea44f">
   <img alt="Self-hosted" src="https://img.shields.io/badge/data-stays%20on%20your%20box-8957e5">
+  <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue">
 </p>
 
 > **Defensive use only**, on an **isolated machine**, with **fake data only**. It deliberately visits
@@ -225,6 +226,11 @@ backend/
 
 Python · FastAPI / uvicorn · SeleniumBase (UC/CDP) + Chrome · Camoufox / Playwright-Firefox · PyMuPDF +
 pyzbar + Pillow (PDF/QR) · httpx (+ SOCKS/Tor) · a single-page vanilla-JS console (no build step).
+
+## License
+
+[MIT](LICENSE) — free to use, modify, and learn from. Provided "as is"; run it responsibly and only on
+infrastructure you are authorised to analyse.
 
 ---
 
