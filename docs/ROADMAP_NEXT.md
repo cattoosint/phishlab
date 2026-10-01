@@ -1,307 +1,253 @@
-# PhishLab — next version plan
+# PhishLab — next version plan (driven by SOC KPIs)
 
-Written after a full read of the tree at `21cb54e` (8,844 LOC across 23 files). Every claim below was
-verified against the code, not the README. Ordered by **what the release needs to be true**, not by
-what is quickest.
+**Goal:** move the SOC's phishing KPIs. That means how fast a reported phish gets a verdict, gets
+blocked and gets taken down, and how much analyst time each case costs, **without letting false
+positives rise**.
+
+Checked against the code at `21cb54e`. Timings below are **upper bounds taken from the code's
+timeouts and fixed waits, not measured wall-clock**. Step K1 exists to replace them with real
+measurements.
 
 ---
 
-## 1. The structural flaw worth building the next version around: the engine split
+## The KPIs, and whether PhishLab can compute them today
 
-This is the single most important finding, and it is invisible from the README.
-
-PhishLab has two detonation engines. They are **not** interchangeable, and the default is the weaker one.
-
-| Capability | `sb_session.py` — **DEFAULT** (Chrome/SeleniumBase UC) | `session.py` (Camoufox, "fallback") |
+| KPI | Definition (from timestamps) | Computable today? |
 |---|---|---|
-| Solves hardened Cloudflare managed Turnstile | **yes** (real OS-mouse click) | no — widget won't render |
-| Live network capture (`page.on` request/response) | **none** | yes |
-| Authoritative exfil proof (typed-value → transmitted-body diff) | **no** — infers from DOM `form.action` + page source | yes (`session.py:581-588`) |
-| AiTM **live backend relay** detection | **no** | yes (`session.py:589-604`) |
-| External/bundled `.js` fetch + de-obfuscate | **no** | yes (`session.py:543-549`) |
-| User-interaction cloaking (CrawlPhish) | **no** | yes (`session.py:172`) |
-| In-app takeover / pause / resume | **stubs** — `forward()` returns, `resume()` is `pass`, `paused` hardcoded `False` (`sb_session.py:200-212`); analyst must use the real desktop Chrome window | full, in the live pane |
+| Time to verdict | `verdict_at − reported_at` | **No.** The case stores `started_at` + `elapsed` but never learns when the phish was reported |
+| Time to first verdict | `provisional_verdict_at − reported_at` | **No.** There is no provisional verdict; the verdict only exists at the very end |
+| Queue wait | `running_at − queued_at` | **No.** The queued state isn't timestamped |
+| Time to acknowledge | `acked_at − verdict_at` | **No.** No notification and no ack exist |
+| Time to contain | `blocked_at − verdict_at` | **No.** Blocking happens entirely outside the tool |
+| Time to takedown | `down_at − detected_at` | **Partly.** Tracker has `went_down_at − first_seen`, but `first_seen` is when an analyst *manually added* the site, and pings are 30 min apart |
+| Automation rate | cases closed with no analyst touch ÷ all cases | **No.** Analyst touch isn't recorded |
+| Precision (FP rate) | analyst-marked FP ÷ verdicts ≥ `likely_phishing` | **No.** `/api/mail/dismiss` drops the item without storing *whether* it was phishing or a false positive (`api.py:414-417`) |
+| Reports vs unique threats | distinct threats ÷ reports | **No.** No dedupe; every report is a separate detonation |
+| Proactive rate | threats found before the first user report ÷ all threats | **No.** PhishLab only acts on URLs someone hands it |
 
-Consequence, stated plainly: **on a Cloudflare-fronted phish you can either get *in* or *see the
-relay* — not both.** The capability the AiTM roadmap calls the thing that "beats PhishGuard" (watching
-the session-cookie relay live) only exists on the engine that cannot pass the gate that real kits sit
-behind. The README's feature list is the **union** of the two engines and is therefore true of no
-single configuration.
-
-AiTM *enrichment* is fine on both paths — `enrich.enrich()` calls `aitm.analyze()` and
-`enrich.score_signals()` folds it into the verdict regardless of engine. The gap is specifically the
-**runtime** tier: anything that requires watching the network during the walk.
-
-### Track A — one engine (the marquee work)
-
-Chrome's DevTools Protocol can do everything Camoufox's `page.on` does. `sb_session.py` already calls
-`execute_cdp_cmd` once (`:330`, for `Security.setIgnoreCertificateErrors`) — the seam exists.
-
-1. `Network.enable` + CDP listeners on the default engine; capture method/url/type/headers/post-body
-   for the whole detonation (bounded buffer, bodies truncated).
-2. Lift the four Camoufox-only analyses into a shared `netanalysis.py` consuming one normalized event
-   list, so both engines produce identical `report["network"]`:
-   typed-vs-transmitted credential diff · off-host POST set · `_BACKENDS` relay detection ·
-   `Set-Cookie` session-token-in-transit.
-3. Port external-JS gathering (`indicators.gather_scripts`) and user-interaction cloaking into the
-   shared walk.
-4. Then **collapse the walkers.** `detonate()` (sandbox.py) and `Session.run()` (session.py) and
-   `SBSession.forward()` are three implementations of one state machine. The AiTM roadmap already
-   flagged this ("unify into one `_walk_step` — batch currently abandons gates at step 0") and it is
-   still open. One walker, two drivers.
-5. Only then decide whether Camoufox stays. If the unified engine does relay detection *and* Turnstile,
-   Camoufox's remaining unique value is the proxy/decloak vantage — which `httpx[socks]` already covers
-   for the scanner view. Deleting an engine is a feature.
-
-**This is what makes the next version announceable:** *one* engine that passes the gate **and** proves the exfil.
+What *does* exist: every finished detonation is written to `backend/data/cases/<id>.json` with its
+URL, `started_at`, `elapsed` and verdict (`session.py:40-46`), and the tracker keeps `first_seen` /
+`went_down_at` (`tracker.py:84-86`). So the storage is there. Nothing aggregates it, and the timestamps
+that matter most for SOC KPIs are never recorded.
 
 ---
 
-## 2. Track B — verdicts you can defend
+## Where the time goes today
 
-### B1. Silent failure is the integrity bug
+`report → intake → queue → detonation → verdict → notify → contain → takedown`
 
-`grep -c "except Exception"` → **261**, of which **118** are followed only by `pass`. Every module's
-docstring says "best-effort; degrades to nothing on error". That is the right instinct for a tool that
-visits hostile hosts, and the wrong one for a tool that outputs a verdict, because:
+### Intake
+- **Gmail only:** `HOST = "imap.gmail.com"` is hardcoded (`mailbox.py:24`).
+- **30-second poll** (`MAIL_POLL_INTERVAL`, `:25`), opening a fresh SSL connection and logging in on
+  every poll (`:124-126`).
+- **Only acts on mail from `MAIL_INTAKE_SENDERS`** (`:63-75`). A user's report therefore reaches
+  PhishLab only after an analyst forwards it. That human hop is probably the biggest single part of
+  time-to-detect, and the tool can't see it.
+- **In-memory queue capped at 60** (`:26`, `:194`), lost on restart.
+- **The case doesn't know where it came from.** The callback passes only the URL
+  (`api.py:402`: `M.start(lambda url: _detonate(url).id)`), so the case can't tell that it came from
+  intake, who reported it, or when the email arrived.
 
-> a probe that **crashed** and a probe that **found nothing** are indistinguishable in the report.
+### Queue
+- **3 concurrent detonations** (`PHISH_MAX_CONCURRENT`, `sb_session.py:48-49`).
+- **The slot is held after Chrome has closed.** It is released in `finally` (`:823`), so it stays held
+  through the redirect chain, enrichment and kit hunt (`:809-813`). The cap exists to protect RAM from
+  Chrome instances, and that post-Chrome work doesn't need it.
+- **Unsolvable Cloudflare gates block a slot for about 5 minutes.** `_solve_cf` makes 3 attempts with
+  roughly 22 s of fixed waits each (`:434-475`), then waits up to **240 s for a human**
+  (`PHISH_CF_HUMAN_TIMEOUT`, `:279`). Intake runs unattended. If there's no human, three such cases
+  stall the whole pipeline.
+- **No dedupe.** Every intake link becomes a detonation (`mailbox.py:200`). One campaign reported by
+  40 users means 40 detonations, run 3 at a time.
 
-A DNS timeout on `spamhaus_dbl` silently removes a 35-point signal. The analyst sees a lower score and
-no indication that anything was skipped. `enrich()` is the clearest case: `asyncio.gather(...,
-return_exceptions=True)` then `ok(x)` maps every exception to `None` — the error is *deliberately*
-discarded (`enrich.py:256-259`).
+### Detonation → verdict: strictly serial
+```
+decloak (:767) → open Chrome (:773) → walk ≤8 steps (:789) → close Chrome
+  → redirect chain (:809) → enrichment (:811) → kit hunt (:813) → verdict (:814)
+```
+- **These stages don't need the walk.** Decloak, the redirect chain and enrichment use only the
+  original URL. Their bounds:
+  - decloak: ≤15 s direct, ≤35 s via Tor/VPN (`tracker.py:278`)
+  - redirect chain: ≤10 hops × 15 s (`sb_session.py:131-137`)
+  - enrichment's slowest path is the AiTM probe: HTTP 8 s → TLS cert 2 × 6 s → TLS timing 5 × 5 s,
+    about 45 s worst case on a host that hangs (`aitm.py:254,263,341-347`)
+- **The verdict is computed once, at the end, even though URL-only signals carry most of the
+  weight.** In `_verdict` (`sandbox.py:313-390`): Safe Browsing **+40**, Spamhaus DBL **+35**,
+  URLhaus **+30**, VirusTotal ≥3 engines **+30**, domain age <7 days **+25**, IP/geo cloaking **+18**,
+  plus the AiTM toolkit signals. Two of these already reach `likely_phishing` (≥45). A URL that is
+  *already blocklisted* still waits for the full browser walk before PhishLab says so.
+- **Page bodies get fetched and then thrown away.** The decloak downloads the page body from every
+  vantage (`tracker.py:283-285`), then keeps only the title and a content signature. The Telegram-bot
+  regex (**+60** on its own) and the source indicators could run on that body before Chrome opens.
 
-**Fix:** a signal-provenance envelope. Every probe returns `{status: ok|empty|error|skipped|n/a,
-value, detail}`. The verdict gains a `coverage` block: which signals ran, which could not be
-evaluated, and a confidence band that *narrows* when coverage is incomplete. Then the UI can say
-"confirmed_phishing (96) — 14/16 signals evaluated; Spamhaus and RDAP timed out" instead of quietly
-scoring 61. **Unknown must never read as clean.**
+### Notify and contain
+- **No notification path exists anywhere in the tree** (no SMTP, webhook, Teams or Slack). The verdict
+  is only visible in the console, so time-to-acknowledge depends on someone looking at it.
+- **Nothing is pushed to a blocklist.**
+- **Tracker additions are manual** (`POST /api/tracker`, `api.py:431`). A detonation never adds
+  itself, so time-to-takedown only gets measured for sites an analyst remembered to add.
 
-This is a cross-cutting refactor, so do it *before* Track A, not after — it is the seam the unified
-engine should be written against.
-
-### B2. There are zero tests
-
-8,844 LOC. No `tests/`, no `.github/`, no CI. The only harness is `demo.py`, a manual end-to-end script
-needing Chrome and a live run. The verdict thresholds (`sandbox.py:387-389` — 80/45/20) and ~30 weighted
-signals have never been regression-tested, and nothing stops a refactor from silently changing a
-verdict.
-
-The good news: **the fixtures already exist.** `/demo-phish/`, `/demo-lead/`, `/demo-cfphish/`,
-`/demo-opendir/`, `/demo-aitm/evilginx`, `/demo-aitm/modlishka`, `/demo-jsexfil/` are a ready-made
-corpus seed, and the parsing/scoring layers are pure Python with no browser dependency:
-
-- **Unit, no browser, CI-able on Linux today:** `mailparse` (.eml/.msg/PDF/QR/de-obfuscation),
-  `extract` (IOC/telegram/scam-signals), `indicators` (source analysis + `LEGIT_DOMAINS`),
-  `aitm` (header/cookie/URL analyzers + `_infer_toolkit`), `enrich.score_signals`,
-  `sandbox._verdict`, `net_guard.check_target`.
-- **Golden-verdict tests:** freeze the full report JSON for each fixture; a diff fails CI. This single
-  mechanism is what makes Track A safe to attempt.
-- **CI:** GitHub Actions, Linux, pure-Python layers only (keep the browser tests as a manual
-  `demo.py` gate). The repo currently has *no* `.github/` at all — a PR runs nothing.
-
-### B3. Nobody knows if it works
-
-The README describes the scoring philosophy well but contains **no accuracy number**, because there is
-no labelled corpus and no measurement. For a detector, that is the missing credential.
-
-Build a **calibration harness**: a labelled set (confirmed phish from PhishTank/OpenPhish + a benign
-set from a top-1M list, URLs + saved HTML so it is replayable offline), run the scorer over it, and
-report precision/recall/FP-rate per threshold. Outputs:
-
-- the thresholds stop being three magic numbers and become **chosen** numbers,
-- the false-positive down-weight logic (`sandbox.py:313-389`) gets *measured* rather than argued,
-- the README can state a real figure. "Weighted verdict with every reason shown" is a design claim;
-  "4.1% FP at 0.5% FN on 2,000 labelled URLs" is an engineering claim. That is the difference a
-  reviewer notices.
-
----
-
-## 3. Track C — case memory (nothing is remembered today)
-
-Persistence is four ad-hoc JSON dumps: `mailbox` last-UID, `cf_solver` result, `tracker` sites,
-`session` report. There is no case store. `BUILD_PLAN.md` Phase 6 ("case history/search") and the
-SQLite layer in its architecture diagram were never built; `docker-compose.yml` still promises a
-"persistent volume for cases/screenshots" that nothing writes to. `/api/report/recent` lists reporter
-screenshots, not cases.
-
-Everything analytical is blocked on this. SQLite + an artifact dir unlocks:
-
-- **Case history + search** — by domain, brand, Telegram bot id, verdict, date, kit hash.
-- **Campaign correlation** — the genuinely new capability. The same `bot_id`, exfil host, or kit
-  fingerprint across N cases *is* a campaign. "This is the 7th case this month exfiltrating to bot
-  `8123…`, all DBS-branded, all on `.top` domains registered within 4 days" is intelligence no
-  single-case tool produces, and it is almost free once cases are rows.
-- **Kit-family clustering** — fuzzy-hash (TLSH/ssdeep) recovered kits + author strings/comments from
-  `kit.py`, cluster, and track families over time. Attribution, not just detection.
-- **Metrics** — cases/week, verdict distribution, takedown MTTR from the tracker's
-  first-reported → went-down timestamps. The tracker already records these and then forgets them.
-- **Report-once** — the `/api/report` flow currently has no memory of what was already submitted.
-
-Schema sketch: `cases` (url, host, verdict, score, engine, started, elapsed) · `signals`
-(case_id, name, score, status, evidence) · `iocs` (case_id, type, value) · `artifacts`
-(case_id, kind, path, sha256) · `tracker_pings` · `kits` (sha256, tlsh, family). Keep the JSON report
-as a blob column so nothing is lost in migration.
+### Takedown
+- **Nothing contacts the hosting provider or registrar, which is where takedowns actually happen.**
+  `report.takedown_targets()` (`report.py:19`) produces portal *links* (Safe Browsing, Microsoft,
+  Fortinet, Netcraft and so on). `reporter.py` drives VT, FortiGuard and Hybrid Analysis, with the
+  analyst solving the CAPTCHAs.
+- **Takedown time has 30-minute resolution.** The tracker pings every 30 min (`tracker.py:24`). Also,
+  `first_seen` is the time the site was added to the tracker (`:84`), not the time it was detected.
 
 ---
 
-## 4. Track D — it stops at the analyst's screen
+## The plan, by KPI
 
-A SOC tool that can't push IOCs into the stack the SOC already runs gets used once and abandoned.
+### K1. Measure first (days of work, and everything else depends on it)
+1. **Lifecycle timestamps on the case:** `reported_at` (the email's `Date` header or the intake time),
+   `queued_at`, `running_at`, `provisional_verdict_at`, `verdict_at`, `notified_at`, `acked_at`,
+   `blocked_at`, `takedown_requested_at`, `down_at`. Also `source` (console, intake, feed or watch)
+   and `reporter`.
+2. **Thread the intake metadata into the case:** change `detonate_cb(url)` to
+   `detonate_cb(url, meta)`.
+3. **Record the analyst's disposition:** a `TP | FP | benign | duplicate` choice stored on the case,
+   both from the intake list and from the case view. That gives the precision KPI. It also builds,
+   for free, the labelled set you need to tune the verdict thresholds (currently the magic numbers
+   80 / 45 / 20 at `sandbox.py:387-389`).
+4. **Per-stage timings in the report:** decloak, browser open, walk, CF solve, enrichment, kit and
+   total. That turns the bounds above into real numbers.
+5. **KPI panel plus a weekly CSV export,** computed from `data/cases/*.json`. A SQLite index can come
+   later; the per-case files are enough to start.
 
-- **Export**: STIX 2.1 bundle, MISP event (push via API), plain CSV/JSON IOC list.
-- **SIEM**: Splunk HEC / Sentinel / generic webhook on verdict ≥ threshold.
-- **Blocklist out**: a feed file (domains/URLs) the proxy or DNS sinkhole can consume directly —
-  the shortest path from "detonated" to "blocked org-wide".
-- **Abuse-desk templating**: the registrar/host abuse contact is already derivable from RDAP + ASN;
-  generate the takedown email with evidence attached. `reporter.py` automates the *scanner* portals;
-  nothing automates the *host*, which is where takedowns actually happen.
-- **API auth + multi-analyst**: the console is unauthenticated by design (loopback-only) and
-  `_cross_origin` CSRF checks exist on **3 of the 24 state-changing endpoints** (49 routes total, 8 of them demo fixtures) (`api.py:149, 158, 179` — update/apply,
-  update/restart, open-native). `/api/detonate`, `/api/email/analyze`, `/api/report`, `/api/tracker/*`
-  and `/api/session/*` have none, so a page the analyst has open in another tab can drive detonations
-  on their dedicated line. Extend `_cross_origin` to every state-changing endpoint (cheap, do it in
-  Track E), then add a token + per-analyst case ownership if PhishLab is ever to serve more than one
-  seat.
+### K2. Faster first verdict
+1. **Fast lane.** At t=0, start enrichment, the AiTM probe, the redirect chain and a static scan of
+   the decloak bodies, all in parallel with launching Chrome. Publish a **provisional verdict** as soon
+   as they return. `_verdict()` already copes with a partial report. Label it *provisional*; the full
+   verdict replaces it when the walk finishes.
+2. **Overlap the pipeline.** Total time becomes roughly *max(walk, enrichment)* instead of
+   *decloak + walk + redirect + enrichment + kit*.
+3. **Release the slot when Chrome closes.** Move `_DETONATE_SEM.release()` to just after the
+   `with SB(...)` block. It's a one-line change, with the same RAM limit and more throughput.
+4. **Statically scan the bodies the decloak already fetched** with the Telegram regex and
+   `indicators.analyze_source`.
 
----
+### K3. Throughput when reports arrive in bursts
+1. **Dedupe and cache verdicts.** If the normalized URL (or the final landing URL, or the registrable
+   domain within a time window) matches an existing case, link the new report to that case instead of
+   detonating again. Forty reports then cost one detonation plus 39 linked reports. The KPI counts both
+   reports and unique threats.
+2. **Park cases that need a human.** When auto-solve fails: close Chrome, free the slot, mark the case
+   `needs_analyst` and notify. Reopen it when an analyst picks it up. This keeps unattended intake
+   moving.
+3. **Priority queue.** Fast-lane `likely`/`confirmed` cases and reports from VIP recipients go first.
+   The current semaphore has no notion of priority.
 
-## 5. Track E — truth and hygiene (do this first; it is cheap)
+### K4. Shorter intake
+1. **IMAP IDLE instead of the 30-second poll** with a fresh login each time, so new mail is seen
+   within seconds.
+2. **Make the mail host configurable** (`MAIL_IMAP_HOST`) instead of hardcoding Gmail. If the
+   organisation runs on Microsoft 365, use Microsoft Graph.
+3. **Read the user-reported-message mailbox directly**, i.e. the mailbox the "Report phishing" button
+   delivers to. A report then reaches PhishLab without an analyst forwarding it. The trusted-sender
+   allowlist exists to stop ordinary mail getting detonated. A dedicated reporting mailbox contains
+   nothing but reports, so the rule simply becomes "everything in this mailbox".
+   - This is the biggest time-to-detect win if forwarding is manual today.
+   - It is also the step that most depends on K3 (dedupe) and K2 (fast lane), because user reports
+     come in high volume and most of them aren't phishing.
 
-### E1. README claims the code does not support
+### K5. Faster containment
+1. **Notify** at `likely` and above, via a Teams or Slack webhook or email. Include the verdict, top
+   reasons, screenshot and a case link. This starts the acknowledge clock.
+2. **Block feed.** Publish confirmed URLs and domains as a plain-text list that the firewall, proxy or
+   DNS filter pulls. FortiGate external threat feeds, Palo Alto EDLs and most web proxies accept that
+   format. Guardrails:
+   - auto-publish only at `confirmed_phishing`
+   - `likely` needs one analyst click
+   - never publish allowlisted domains
+   - entries expire
+3. **Auto-add to the tracker** at `likely` and above, with `detected_at` set to the verdict time.
+4. **Retro-hunt helper.** Generate the "who else received this?" search (sender, subject, URL,
+   domain) as a ready-to-run mail-trace or Defender query. Actually purging mail stays with the
+   analyst.
 
-The "Notable engineering decisions" section is the part a technical reviewer reads closest, so these
-matter disproportionately:
+### K6. Faster takedown
+1. **Contact the registrar and host directly.** Get the registrar's abuse email from domain RDAP
+   (already fetched by `enrich.rdap_domain`) and the host's abuse contact from IP RDAP. Generate the
+   takedown email with screenshot, URL, first-seen time and exfil evidence; send it in one click; record
+   `takedown_requested_at`.
+2. **Submit by API at `confirmed`** to Netcraft and any other service that accepts URL reports that
+   way. Check each service's terms first.
+3. **Adaptive tracker cadence:** ping every 5 minutes for the first few hours after reporting, then
+   back off to 30. That gives takedown time real resolution.
 
-- **"validate-and-pin to close the DNS-rebind TOCTOU (resolve once, pin the browser/scanner to the
-  validated IP)"** — **not implemented.** `net_guard.check_target()` resolves, checks, and returns
-  `(bool, str)`. It never returns or pins an IP; the subsequent fetch resolves again. No
-  `--host-resolver-rules`, no pinned-IP transport anywhere in the tree. `enrich.py:248`'s "resolve
-  once" is for parallelism, not pinning. **Either implement it** (return the validated IP; pass
-  Chrome `--host-resolver-rules=MAP host ip`, and use a pinned-IP httpx transport with the original
-  `Host` header + SNI) **or correct the sentence.** Implementing is ~40 lines and keeps the claim.
-- **The feature list is the engine union** (§1). Either unify (Track A) or state which engine does what.
-- **"no telemetry / the sample never leaves the box"** is accurate and well-qualified — keep it exactly
-  as worded.
+### K7. Detect before anyone reports it
+1. **Certificate Transparency brand watch.** Stream newly issued TLS certificates (certstream, or a
+   self-hosted CT log poller), match them against the protected brand names and lookalikes, and
+   auto-detonate the matches. Phishing sites usually get a certificate *before* the emails go out. This
+   is the only lever that yields "detected before the first report".
+2. **Lookalike-domain watch.** Generate permutations of the organisation's own domains (typos,
+   homoglyphs, TLD swaps, dnstwist-style). Check them periodically for registration and resolution,
+   and detonate new ones.
+3. **Feed ingestion.** Pull OpenPhish, URLhaus and PhishTank feeds, filter to protected brands and
+   auto-detonate. OpenPhish and phishunt were already on the AiTM roadmap and still aren't implemented.
 
-### E2. SSRF guard coverage is narrower than it looks
+### K8. Keep the speed honest (detection quality)
+Faster verdicts and auto-blocking raise the risk of false positives, so precision has to be tracked
+next to speed. These items mostly move accuracy rather than speed, so they rank below K1–K7. They
+still matter:
 
-`net_guard` is called in `api.py` (entry URL), `sb_session.py` (per redirect hop — good),
-`reporter.py`, `mailbox.py`. It is called **zero** times in `kit.py`, `tracker.py`, `enrich.py`,
-`phishtank.py`, `session.py`, `aitm.py`, `sandbox.py` — all of which fetch URLs *derived from
-attacker-controlled content*. Highest-risk: `kit.py` recursing an open directory (14 fetch sites —
-a link in the attacker's listing can point anywhere) and `tracker.py` (23 — pings persisted URLs on a
-30-min loop forever). Route every outbound fetch through one guarded client; make the unguarded path
-the one you have to ask for.
+- **Engine split.** On the default Chrome engine, exfil proof, live AiTM relay detection, external-JS
+  decoding and in-app takeover all go missing:
 
-### E3. Docker/Linux is broken, not merely untested
+  | Capability | `sb_session.py` — **default** (Chrome / SeleniumBase UC) | `session.py` (Camoufox) |
+  |---|---|---|
+  | Solves hardened Cloudflare Turnstile | **yes** (real OS-mouse click) | no |
+  | Live network capture | **none** | yes (`page.on`) |
+  | Proof of where typed creds were sent | **no**, infers it from DOM `form.action` | yes (`session.py:581-588`) |
+  | Live AiTM backend-relay detection | **no** | yes (`session.py:589-604`) |
+  | External `.js` fetch and decode | **no** | yes (`session.py:543-549`) |
+  | Interaction-gated reveals (CrawlPhish) | **no** | yes (`session.py:170-188`) |
+  | In-app takeover / pause / resume | **stubs:** `forward()` returns, `resume()` is `pass` (`sb_session.py:204-212`) | full |
 
-Two concrete defects:
+  The fix is CDP network capture on the Chrome engine (it already calls `execute_cdp_cmd` at
+  `sb_session.py:330`), plus one shared analysis module so both engines produce the same report.
+- **Silent failures.** There are 261 `except Exception` handlers, 118 of them `pass`-only. A
+  timed-out Safe Browsing or Spamhaus lookup silently drops its 35–40 points. With a fast lane this
+  gets worse: a provisional verdict has to say which signals it doesn't have yet.
+- **No tests and no CI.** The fast lane changes *when* the verdict is computed, so add golden-verdict
+  tests on the built-in demo kits (`/demo-phish/`, `/demo-cfphish/`, `/demo-aitm/…`, and so on)
+  before it ships.
 
-1. `Dockerfile` → `CMD ["uvicorn", "api:app", "--host", "127.0.0.1", ...]`. Bound to the *container's*
-   loopback, so `docker-proxy` (which forwards to the container's `eth0`) can never reach it. The
-   published `127.0.0.1:8090:8090` port is dead. Must bind `0.0.0.0` *inside* the container and rely
-   on the host-side `127.0.0.1:` publish for the loopback guarantee.
-2. The image installs **Playwright Firefox**, but the default engine is **SeleniumBase/Chrome**, which
-   is not installed — so the default engine cannot run in the container at all. The real-OS-mouse
-   Turnstile click (PyAutoGUI) also has no display.
-
-Pick one: fix it properly (a container that runs the Camoufox engine honestly, documented as
-"no Turnstile solving") or **delete `Dockerfile` + `docker-compose.yml`**. A broken Docker path is worse
-than none, because it is the first thing a reviewer tries.
-
-### E4. Dependencies float where it hurts most
-
-Pinned: `playwright==1.51.0`, `camoufox==0.4.11` (with an excellent comment explaining why).
-Floating: `seleniumbase>=4.50` — *the Cloudflare-solving core* — plus `fastapi`, `uvicorn`, `httpx`,
-`cryptography`, `pymupdf`, `pyzbar`, `pillow`. A SeleniumBase minor bump can silently break Turnstile
-solving, and the README already concedes browser automation is "maintenance-sensitive". Add a
-lockfile (`pip-compile`/`uv lock`) with hashes, and keep `requirements.txt`'s comments — they are
-genuinely good documentation. Also fold the `extract-msg --no-deps` step out of `Install.bat` into the
-lock, or the installed environment is not reproducible.
-
-### E5. Static allowlist won't scale
-
-`indicators.LEGIT_DOMAINS` is a hand-maintained 70-domain set. The AiTM roadmap's suggestion stands:
-augment with a **Cloudflare Radar / Tranco top-1M** cached list (`radar`/`tranco`/`top-1m`: 0 hits in
-the tree today). Keep the static set as the high-confidence core; use the dynamic list only for the
-false-positive down-weight, never to zero out a verdict.
-
-### E6. Give it a real version
-
-`__version__` is still `"0.1.0"` (`backend/phishlab/__init__.py:2`), there are no git tags, and
-`GET /api/version` returns `md5(index.html)[:12]` — a GUI cache-buster, not a release id. Bump it,
-tag the release, and have `/api/version` return both (`{"app": "…", "ui": "<md5>"}`) so the console
-and `start.bat` can show which build is actually running.
-
----
-
-## 6. Track F — new detection surface (the "what else")
-
-Ordered by value-per-effort. All fit the existing "parse and statically decode, never execute" rule.
-
-1. **HTML smuggling** — currently the dominant delivery TTP and a direct fit: a `.html` attachment with
-   a blob/`data:` URI built in JS, `atob`-decoded, auto-downloaded. `mailparse.py` already de-obfuscates
-   nested `atob`/`\xNN`; detecting `Blob` + `msSaveOrOpenBlob` + `a.download` + a decoded archive magic
-   number is a contained addition with a high hit rate.
-2. **Static payload triage** (not malware sandboxing — keep that scope line): `oletools` macro
-   extraction, LNK target parsing, ISO/IMG/VHD listing, OneNote embedded-file extraction, archive
-   inspection. Yields IOCs from the ~40% of phish whose payload is an attachment, without detonating a
-   binary. The README's "won't detonate a binary payload" limitation stays honest.
-3. **Headless-safe Turnstile path** — PyAutoGUI's real-OS-mouse click is what pins PhishLab to an
-   interactive Windows desktop and blocks unattended/server operation. Investigate a virtual-display
-   (`headless="virtual"` / Xvfb+xdotool) path. This is the gate on every "run it as a service" ambition,
-   including intake-at-scale.
-4. **Reputation feeds still missing** — `openphish` / `phishunt` (0 hits). Keyless, TTL-cached, and
-   the AiTM roadmap already specified the `_fetch_feed` pattern. Cheapest remaining detection win.
-5. **MFA/step-up depth** — push-notification and number-matching kits, and OTP re-prompt loops, are
-   where AiTM actually lands. The walker handles `email → password` two-step; extend the state machine
-   (once unified in Track A) to the step-up families.
-6. **Favicon/visual hashing** — `BUILD_PLAN.md` §3C listed brand detection by favicon hash; today it is
-   title/keyword regex only. A perceptual hash survives a text-free, image-only clone, which regex
-   cannot.
-
----
-
-## 7. Recommended sequence
-
-Dependency-ordered, not wish-ordered. E is first because it is cheap and removes the claims most
-likely to embarrass; B2 is second because **nothing else is safe to refactor without it**.
-
-| # | Work | Why here |
-|---|---|---|
-| 1 | **E1–E6** — fix/soften README claims, guard every fetch, extend CSRF to all state-changing endpoints, decide Docker, lock deps, real version + tag | Days. Removes the findings a sharp reader hits first. |
-| 2 | **B2** — fixture corpus + golden-verdict tests + Linux CI | The safety net every later track needs. |
-| 3 | **B1** — signal-provenance envelope + verdict `coverage` | Cross-cutting; the seam Track A must be written against. |
-| 4 | **A** — CDP network capture on the default engine → shared `netanalysis.py` → one walker | The marquee capability. Safe now, because 2–3 exist. |
-| 5 | **C** — SQLite case store → history/search → campaign correlation | Unlocks everything analytical. |
-| 6 | **B3** — labelled corpus + calibration harness → a real accuracy number | Needs C's storage and B1's provenance to mean anything. |
-| 7 | **D / F** — exports + SIEM + abuse-desk + auth; HTML smuggling, payload triage, headless Turnstile | Breadth, once the core is trustworthy. |
-
-### What the next version should mean in one line
-
-> *Not more features — the same features, provable.* One engine that both passes the gate and proves
-> the exfil; a verdict that reports what it could not evaluate; a measured false-positive rate; and
-> cases that are remembered.
-
-The feature breadth is already there. The thing it lacks is the evidence that it is right — which is
-precisely the thing a bank SOC, and a hiring reviewer, will ask for first.
+### Hygiene and security (cheap, can be done any time)
+- **The README's "validate-and-pin" claim isn't implemented.** `net_guard.check_target()` checks the
+  resolved IP but never pins it, so the fetch resolves again (a DNS-rebind window).
+- **The SSRF guard is missing from 7 modules that fetch URLs derived from attacker content**
+  (`kit`, `tracker`, `enrich`, `phishtank`, `session`, `aitm`, `sandbox`).
+- **Cross-origin (CSRF) protection is on only 3 of the 24 state-changing endpoints.** Any page open in
+  another browser tab can trigger detonations.
+- **The Docker setup doesn't work.** uvicorn binds the container's loopback, so the published port
+  can't reach it, and the image installs Firefox while the default engine needs Chrome.
+- **Dependencies float.** `seleniumbase>=4.50` is the Turnstile-solving core.
+- **No real version.** `__version__` is still `0.1.0` and there are no git tags.
 
 ---
 
-## Appendix — numbers behind the above (verified at `21cb54e`)
+## Recommended order (KPI impact per unit of effort)
 
-| Metric | Value |
-|---|---|
-| Python LOC | 7,421 · plus UI `index.html` 1,423 → 8,844 total |
-| Largest modules | `session.py` 863 · `api.py` 849 · `sb_session.py` 841 · `reporter.py` 575 · `mailparse.py` 548 |
-| `except Exception` handlers | 261 (118 `pass`-only); bare `except:` 0 |
-| Tests | 0 · CI workflows 0 (`.github/` absent; only Dependabot's implicit graph job) |
-| API routes | 49 (8 demo fixtures) · state-changing non-demo: 24 · with CSRF guard: 3 · with auth: 0 |
-| `net_guard` call sites | 4 modules · absent from 7 that fetch derived URLs (`kit`, `tracker`, `enrich`, `phishtank`, `session`, `aitm`, `sandbox`) |
-| Persistence | 4 ad-hoc `json.dump` files · 0 databases |
-| Git tags / releases | 0 / 0 |
-| AiTM roadmap ① ③ | largely delivered (wildcard DNS, header/cookie/URL analyzers, `_infer_toolkit`, live cert, TLS timing, brand coherence) |
-| AiTM roadmap ② | partial — runtime relay exists **only** in `session.py`, the non-default engine |
-| Still absent from that roadmap | openphish/phishunt feeds · Cloudflare Radar top-1M · external-JS decode on the default engine · unified walker |
+| # | Work | KPI it moves | Rough effort |
+|---|---|---|---|
+| 1 | **K1**: lifecycle timestamps, intake→case linkage, TP/FP disposition, per-stage timings, KPI panel | makes every KPI computable | days |
+| 2 | **K2.3** free the slot when Chrome closes, then **K2.2** overlap the pipeline | time to verdict, throughput | ~1–2 days |
+| 3 | Golden-verdict tests on the demo kits, then **K2.1 / K2.4** fast-lane provisional verdict | time to first verdict | days |
+| 4 | **K5.1** notifications + **K5.3** auto-add to tracker | time to acknowledge; takedown becomes measurable | days |
+| 5 | **K3** dedupe + park human-needed cases | throughput, queue wait | ~1 week |
+| 6 | **K4** IMAP IDLE + configurable host, then reporting-mailbox intake | intake latency, time to detect | ~1 week (more if via Graph) |
+| 7 | **K5.2** block feed with guardrails | time to contain | days |
+| 8 | **K6** abuse-contact takedown emails + adaptive tracker cadence | time to takedown | ~1 week |
+| 9 | **K7** CT / lookalike / feed watch | proactive rate | 1–2 weeks |
+| — | **K8** and hygiene, alongside the above | precision | ongoing |
+
+Steps 1–4 are mostly plumbing around logic that already exists. They don't need new detection
+techniques, and they move the most KPIs per day of work.
+
+## In one line
+
+The detection logic is largely there. What's missing is speed through the pipeline and the timestamps
+to prove it: measure first, run the serial stages in parallel, stop relying on an analyst to forward
+mail, and push verdicts to where blocking happens.
